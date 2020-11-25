@@ -81,24 +81,25 @@ def bin_halos(forest_table, sn, bins):
 # return masses, time steps, main progenitor id's, and locations of major mergers for its mp branch #
 #####################################################################################################
     
-def track_evol(idx, redshifts, prog_idx, forest_tbl, mm_thresh_small = 0.1, mm_thresh_big = 0.3, normalized = False, x_axis = 'z_nums', z_threshold = 1): # Just track the evolution of one halo -- bells and whistles come later
+def track_evol(idx, redshifts, prog_idx, forest_masses, forest_snap_nums, thresholds, thresholds_are_absolute = False, normalized = False, x_axis = 'z_nums', z_threshold = 1): # Just track the evolution of one halo -- bells and whistles come later
     
-    major_mergers = [np.empty(0), np.empty(0)] # Do these have to be np arrays? # Try lists too
-    major_merger_times = [np.empty(0), np.empty(0)]
+    #major_mergers = [[], []] # Do these have to be np arrays? # Try lists too
+    major_mergers = [[] for thresh in range(len(thresholds))]
+    major_merger_times = [[] for thresh in range(len(thresholds))]
     #LMMs = [np.empty(0), np.empty(0)]
-    LMMs = [None, None]
-    LMM_times = [None, None]
-    fossil_clusters = [np.empty(0), np.empty(0)]
+    LMMs = [None for thresh in range(len(thresholds))]
+    LMM_times = [None for thresh in range(len(thresholds))]
+    fossil_groups = [None for thresh in range(len(thresholds))]
     
     # Start tracking
     target_idx = int(idx)  # np.int(np.array(idx))
     progenitors = prog_idx[target_idx]
-    z_current = redshifts[100 - forest_tbl.snap_num[target_idx]]
+    z_current = redshifts[100 - forest_snap_nums[target_idx]]
     main_progenitor_list = [target_idx]
 
     # Generate main branch: find all the progenitors of the halo (at each timestep)
     while len(progenitors) > 0:
-        masses = [forest_tbl['mass'][i] for i in progenitors] # Find masses for each progenitor of the halo at this time step
+        masses = [forest_masses[i] for i in progenitors] # Find masses for each progenitor of the halo at this time step
 
         # Count major mergers
         if len(progenitors) > 1:
@@ -106,53 +107,68 @@ def track_evol(idx, redshifts, prog_idx, forest_tbl, mm_thresh_small = 0.1, mm_t
             sorted_progenitors = np.array(progenitors)[order_by_mass] # Why do I need np.array here?
             sorted_masses = np.array(masses)[order_by_mass]
 
-            # Is this a major merger (by first definition?)
-            if sorted_masses[0]*(mm_thresh_small) < sorted_masses[1]:
+            # Loop over all thresholds (definitions)
+            for i, threshold in enumerate(thresholds):
+                absolute_threshold = threshold if thresholds_are_absolute else threshold * sorted_masses[0]
                 
-                # Is this an LMM?
-                if LMM[0] is None:
+                # Is this a major merger? (under the current definition)
+                if sorted_masses[1] >= absolute_threshold:
+                    # yay, it's a major merger!
+                    major_mergers[i].append(sorted_progenitors[i])
+                    major_merger_times[i].append(forest_snap_nums[sorted_progenitors[i]])
+                    
+                    # Is this an LMM? # Might not even be necessary...
+                    if LMMs[i] is None:
+                        LMMs[i] = sorted_progenitors[i]
+                        LMM_times[i] = forest_snap_nums[sorted_progenitors[i]]
+
+                        # Is this a potential fossil group?
+                        if z_current >= z_threshold:
+                            fossil_groups[i] = target_idx
+                        
+# Old stuff starts here
+
+            # Is this a major merger (by first definition?)
+            #if sorted_masses[0]*(mm_thresh_small) < sorted_masses[1]:
+                
+            #    # Is this an LMM?
+            #    if LMMs[0] is None:
                 #if len(major_mergers[0]) == 0:
-                    LMMs[0] = sorted_progenitors[0]
-                    LMM_times[0] = forest_tbl['snap_num'][sorted_progenitors[0]]
+            #        LMMs[0] = sorted_progenitors[0]
+            #        LMM_times[0] = forest_snap_nums[sorted_progenitors[0]]
                     
                     # Is this a potential fossil cluster?
-                    if z_current >= z_threshold:
-                        fossil_clusters[0] = np.append(fossil_clusters[0], target_idx)
+            #        if z_current >= z_threshold:
+            #            fossil_groups[0].append(target_idx)
                 
-                major_mergers[0] = np.append(major_mergers[0], sorted_progenitors[0])
-                # Ack
-                #major_merger_times[0] = np.append(major_merger_times[0], redshifts[100 - forest_tbl['snap_num'][sorted_progenitors[0]]])
-                major_merger_times[0] = np.append(major_merger_times[0], forest_tbl['snap_num'][sorted_progenitors[0]])
+            #    major_mergers[0].append(sorted_progenitors[0])
+            #    major_merger_times[0].append(forest_snap_nums[sorted_progenitors[0]])
                 
             # Is this also a major merger by the second definition?
-            if sorted_masses[0]*(mm_thresh_big) < sorted_masses[1]:
+            #if sorted_masses[0]*(mm_thresh_big) < sorted_masses[1]:
                 # How to remove this duplication?
 
                 # Change this
                 # Is this an LMM under the second definition?
-                if len(major_mergers[1]) == 0:
-                    LMMs[1] = np.append(LMMs[1], sorted_progenitors[0])
-                    LMM_times[1] = np.append(LMM_times[1], forest_tbl['snap_num'][sorted_progenitors[0]])
-                    # Ack
-                    #LMM_times[1] = np.append(LMM_times[1], redshifts[100 - forest_tbl['snap_num'][sorted_progenitors[0]]])
+            #    if LMMs[1] is None:
+            #        LMMs[1] = sorted_progenitors[0]
+            #        LMM_times[1] = forest_snap_nums[sorted_progenitors[0]]
 
                     # Is this a potential fossil cluster under the second definition?
-                    if z_current >= z_threshold:
-                        fossil_clusters[1] = np.append(fossil_clusters[1], target_idx)
+            #        if z_current >= z_threshold:
+            #            fossil_groups[1].append(target_idx)
 
-                major_mergers[1] = np.append(major_mergers[1], sorted_progenitors[0]) 
-                #Ack
-                #major_merger_times[1] = np.append(major_merger_times[1], redshifts[100 - forest_tbl['snap_num'][sorted_progenitors[0]]])
-                major_merger_times[1] = np.append(major_merger_times[1], forest_tbl['snap_num'][sorted_progenitors[0]])
+            #    major_mergers[1].append(sorted_progenitors[0])
+            #    major_merger_times[1].append(forest_snap_nums[sorted_progenitors[0]])
             
         # Continue
         main_progenitor = progenitors[np.argmax(masses)]
         main_progenitor_list.append(main_progenitor)
         progenitors = prog_idx[main_progenitor]
-        z_current = redshifts[100 - forest_tbl.snap_num[main_progenitor]]
+        z_current = redshifts[100 - forest_snap_nums[main_progenitor]]
 
     # Also, do these have to be np arrays?
-    raw_masses = [forest_tbl['mass'][mp] for mp in main_progenitor_list]  # Mass of each main progenitor for this halo 
+    raw_masses = [forest_masses[mp] for mp in main_progenitor_list]  # Mass of each main progenitor for this halo 
     final_masses = np.append(raw_masses, np.zeros(101 - len(raw_masses))) #*norm  # Standardize mass array with length 101 and un-normalized mass
 
     #print("For this halo, len(major_mergers[0]): ", len(major_mergers[0]), " and len(major_mergers[1]): ", len(major_mergers[1]))
@@ -163,15 +179,15 @@ def track_evol(idx, redshifts, prog_idx, forest_tbl, mm_thresh_small = 0.1, mm_t
     if normalized == True:
         # Probably doesn't work
         #final_masses = final_masses / forest_tbl['mass'][target_idx].values.tolist() #masses_std[len(masses_std) - 1]
-        final_masses = final_masses / forest_tbl['mass'][target_idx] # Doesn't need .values because there's just one
+        final_masses = final_masses / forest_masses[target_idx] # Doesn't need .values because there's just one
 
     # Return all the things you need!
     if x_axis == 'z_nums':
         z_nums = redshifts
-        return z_nums, final_masses, main_progenitor_list, major_mergers, major_merger_times, LMMs, LMM_times, fossil_clusters
+        return z_nums, final_masses, main_progenitor_list, major_mergers, major_merger_times, LMMs, LMM_times, fossil_groups
     elif x_axis == 'snap_nums':
         snap_nums = np.linspace(100, 0, 101)
-        return snap_nums, final_masses, main_progenitor_list, major_mergers, major_merger_times, LMMs, LMM_times, fossil_clusters
+        return snap_nums, final_masses, main_progenitor_list, major_mergers, major_merger_times, LMMs, LMM_times, fossil_groups
     
 ###############################################################################################################
 # Track Evolution: multiple halos                                                                             #
@@ -179,7 +195,7 @@ def track_evol(idx, redshifts, prog_idx, forest_tbl, mm_thresh_small = 0.1, mm_t
 # return LISTS of masses, time steps, main progenitor id's, and locations of major mergers for each mp branch #
 ###############################################################################################################
 
-def track_evol_multiple(idx, redshifts, prog_idx, forest_tbl, mm_thresh_small = 0.1, mm_thresh_big = 0.3, normalized = False, x_axis = 'z_nums'):
+def track_evol_multiple(idx, redshifts, prog_idx, forest_masses, forest_snap_nums, thresholds, thresholds_are_absolute = False, normalized = False, x_axis = 'z_nums'):
     print("In track_evol_multiple")
     all_timesteps= []
     all_masses = []
@@ -188,37 +204,42 @@ def track_evol_multiple(idx, redshifts, prog_idx, forest_tbl, mm_thresh_small = 
     all_major_merger_times = []
     #all_major_mergers = [np.empty(0), np.empty(0)]
     #all_major_merger_times = [np.empty(0), np.empty(0)]
-    all_LMMs = [np.empty(0), np.empty(0)]
-    all_LMM_times = [np.empty(0), np.empty(0)]
-    all_fossil_clusters = [np.empty(0), np.empty(0)]
+    all_LMMs = []
+    all_LMM_times = []
+    #all_LMMs = [np.empty(0), np.empty(0)]
+    #all_LMM_times = [np.empty(0), np.empty(0)]
+    all_fossil_groups = []
 
     # Loop over each halo
-    for i in range(len(idx)):
-        timesteps, masses, main_progenitor_list, major_mergers, major_merger_times, LMMs, LMM_times, fossil_clusters = track_evol(idx[i], redshifts, prog_idx, forest_tbl, mm_thresh_small, mm_thresh_big, normalized, x_axis)
+    for this_halo_id in idx:
+        timesteps, masses, main_progenitor_list, major_mergers, major_merger_times, LMMs, LMM_times, fossil_groups = track_evol(this_halo_id, redshifts, prog_idx, forest_masses, forest_snap_nums, thresholds, thresholds_are_absolute, normalized, x_axis)
         
         all_timesteps.append(timesteps)
         all_masses.append(masses)
         all_main_prog_list.append(main_progenitor_list)
         
-        if len(major_mergers[0]) == 0:
-            all_major_mergers.append(major_mergers)
-            all_major_merger_times.append(major_merger_times)
-            
-            if len(LMMs[0]) != 0: # vs. LMMs[0] != []?
-                all_LMMs[0] = np.append(all_LMMs[0], LMMs[0])
-                all_LMM_times[0] = np.append(all_LMM_times[0], LMM_times[0])
-            if len(LMMs[1]) != 0:# vs. LMMs[0] != []?
-                all_LMMs[1] = np.append(all_LMMs[1], LMMs[1])
-                all_LMM_times[1] = np.append(all_LMM_times[1], LMM_times[1])
+        #if len(major_mergers[0]) != 0:
+        all_major_mergers.append(major_mergers)
+        all_major_merger_times.append(major_merger_times)
+
+        all_LMMs.append(LMMs)
+        all_LMM_times.append(LMM_times)
+
+        all_fossil_groups.append(fossil_groups)
+            #if LMMs[0] is not None: # vs. LMMs[0] != []?
+            #    all_LMMs[0].append(LMMs[0])
+            #    all_LMM_times[0].append(LMM_times[0])
+            #if LMMs[1] is not None:# vs. LMMs[0] != []?
+            #    all_LMMs[1].append(LMMs[1])
+            #    all_LMM_times[1].append(LMM_times[1])
                 
             #if len(fossil_clusters[0]) != 0 or len(fossil_clusters[1] != 0): # If either dim contains anything
-            if len(fossil_clusters[0]) != 0:
-                all_fossil_clusters[0] = np.append(all_fossil_clusters[0], fossil_clusters[0])
-            elif len(fossil_clusters[1]) != 0:
-                all_fossil_clusters[1] = np.append(all_fossil_clusters[1], fossil_clusters[1])
+            #if len(fossil_clusters[0]) != 0:
+            #    all_fossil_clusters[0].append(fossil_groups[0])
+            #elif len(fossil_clusters[1]) != 0:
+            #    all_fossil_clusters[1].append(fossil_groups[1])
                     
-    #print("all_fossil_clusters: ", all_fossil_clusters)
-    return all_timesteps, all_masses, all_main_prog_list, all_major_mergers, all_major_merger_times, all_LMMs, all_LMM_times, all_fossil_clusters
+    return all_timesteps, all_masses, all_main_prog_list, all_major_mergers, all_major_merger_times, all_LMMs, all_LMM_times, all_fossil_groups
 
 ######################################################################################################################
 # Track Evolution: binned halos                                                                                      #
@@ -226,7 +247,7 @@ def track_evol_multiple(idx, redshifts, prog_idx, forest_tbl, mm_thresh_small = 
 # return BINNED lists of masses, time steps, main progenitor id's, and locations of major mergers for each mp branch #
 ######################################################################################################################
 
-def track_evol_binned(idx, bins, redshifts, prog_idx, forest_tbl, mm_thresh_small = 0.1, mm_thresh_big = 0.3, normalized = False, x_axis = 'z_nums'):
+def track_evol_binned(idx, bins, redshifts, prog_idx, forest_masses, forest_snap_nums, thresholds, thresholds_are_absolute = False, normalized = False, x_axis = 'z_nums'):
     all_timesteps= []
     all_masses = []
     all_main_prog_list = []
@@ -234,15 +255,16 @@ def track_evol_binned(idx, bins, redshifts, prog_idx, forest_tbl, mm_thresh_smal
     all_major_merger_times = []
     #all_LMMs = []
     #all_LMM_times = []
-    all_LMMs = [[np.empty(0) for thresh in range(2)] for i in range(len(bins) - 1)]
-    all_LMM_times = [[np.empty(0) for thresh in range(2)] for i in range(len(bins) - 1)]
-    all_fossil_clusters = [[np.empty(0) for i in range(len(bins) - 1)] for thresh in range(2)] # 2 thresh, # bins
+    all_LMMs = []
+    all_LMM_times = []
+    all_fossil_groups = []
+    #all_LMMs = [[[] for thresh in range(2)] for i in range(len(bins) - 1)]
+    #all_LMM_times = [[[] for thresh in range(2)] for i in range(len(bins) - 1)]
+    #all_fossil_clusters = [[[] for i in range(len(bins) - 1)] for thresh in range(2)] # 2 thresh, # bins
 
     # Loop over each bin
-    for i in range(len(bins) - 1):
-        timesteps, masses, main_progenitor_list, major_mergers, major_merger_times, LMMs, LMM_times, fossil_clusters = track_evol_multiple(idx[i], redshifts, prog_idx, forest_tbl, mm_thresh_small, mm_thresh_big, normalized, x_axis)
-        if len(fossil_clusters[0]) == 0:
-            print("Ack")
+    for this_bin_idx in idx:
+        timesteps, masses, main_progenitor_list, major_mergers, major_merger_times, LMMs, LMM_times, fossil_groups = track_evol_multiple(this_bin_idx, redshifts, prog_idx, forest_masses, forest_snap_nums, thresholds, thresholds_are_absolute, normalized, x_axis)
         
         all_timesteps.append(timesteps)
         all_masses.append(masses)
@@ -252,33 +274,37 @@ def track_evol_binned(idx, bins, redshifts, prog_idx, forest_tbl, mm_thresh_smal
         all_major_mergers.append(major_mergers)
         all_major_merger_times.append(major_merger_times)
 
-        if len(LMMs[0]) != 0: # vs. LMMs[0] != []?
-            all_LMMs[i][0] = np.append(all_LMMs[i][0], LMMs[0])
-            all_LMM_times[i][0] = np.append(all_LMM_times[i][0], LMM_times[0])
-        if len(LMMs[1]) != 0:# vs. LMMs[0] != []?
-            all_LMMs[i][1] = np.append(all_LMMs[i][1], LMMs[1])
-            all_LMM_times[i][1] = np.append(all_LMM_times[i][1], LMM_times[1])
+        all_LMMs.append(LMMs)
+        all_LMM_times.append(LMM_times)
+        
+        all_fossil_groups.append(fossil_groups)
+        #if len(LMMs[0]) != 0: # vs. LMMs[0] != []?
+        #    all_LMMs[i][0].append(LMMs[0])
+        #    all_LMM_times[i][0].append(LMM_times[0])
+        #if len(LMMs[1]) != 0:# vs. LMMs[0] != []?
+        #    all_LMMs[i][1].append(LMMs[1])
+        #    all_LMM_times[i][1].append(LMM_times[1])
 
-        if len(fossil_clusters[0]) != 0:
-            all_fossil_clusters[0][i] = np.append(all_fossil_clusters[0][i], fossil_clusters[0])
-        if len(fossil_clusters[1]) != 0:
-            all_fossil_clusters[1][i] = np.append(all_fossil_clusters[1][i], fossil_clusters[1])
+        #if len(fossil_clusters[0]) != 0:
+        #    all_fossil_clusters[0][i].append(fossil_clusters[0])
+        #if len(fossil_clusters[1]) != 0:
+        #    all_fossil_clusters[1][i].append(fossil_clusters[1])
             
     #print("len of all_major_mergers inside track_evol_binned is: ", len(all_major_mergers))
-    return all_timesteps, all_masses, all_main_prog_list, all_major_mergers, all_major_merger_times, all_LMMs, all_LMM_times, all_fossil_clusters
+    return all_timesteps, all_masses, all_main_prog_list, all_major_mergers, all_major_merger_times, all_LMMs, all_LMM_times, all_fossil_groups
     
 ###############################################################################
 # Average Bins:                                                               #
 # track the evolution of halos in bins, return the average masses of each bin #
 ###############################################################################
 
-def avg_bins(idx, bins, redshifts, prog_idx, forest_tbl, mm_thresh_small = 0.1, mm_thresh_big = 0.3, normalized = False, x_axis = 'z_nums'):
+def avg_bins(idx, bins, redshifts, prog_idx, forest_masses, forest_snap_nums, thresholds, thresholds_are_absolute = False, normalized = False, x_axis = 'z_nums'):
     #Note that here, idx comes from bin_halos, so it's a 2D matrix (ie. five bins with some # halos per bin)
     final_masses = []
     final_timesteps = []
     
     # Track the evolution of halos in bins
-    timesteps, masses, main_prog_list, maj_mergers, mm_times, LMMs, LMM_times, fossil_clusters = track_evol_binned(idx, bins, redshifts, prog_idx, forest_tbl, mm_thresh_small, mm_thresh_big, normalized, x_axis)
+    timesteps, masses, main_prog_list, maj_mergers, mm_times, LMMs, LMM_times, fossil_clusters = track_evol_binned(idx, bins, redshifts, prog_idx, forest_masses, forest_snap_nums, thresholds, thresholds_are_absolute, normalized, x_axis)
     
     # Take the average over all the masses in each bin
     for i in np.arange(len(bins) - 1): # Same as len(masses)
@@ -294,7 +320,7 @@ def avg_bins(idx, bins, redshifts, prog_idx, forest_tbl, mm_thresh_small = 0.1, 
 # Display M(z) for halos that we tracked in track_evol #
 ########################################################
     
-def plot_evol(timesteps, masses, forest_tbl, mm_times = [[], []], filename = "new_plot", bins = [], avg = False, normalized = False, extremum = '', quant = 0, mass_range = [], x_axis = "z_nums"):
+def plot_evol(timesteps, masses, forest_tbl, redshifts = redshifts, mm_times = [[], []], filename = "new_plot", bins = [], avg = False, normalized = False, extremum = '', quant = 0, mass_range = [], x_axis = "z_nums"):
     
     fig, ax = plt.subplots()
     color = iter(cm.jet(np.linspace(0,1,len(masses)))) # Bin colors
@@ -330,7 +356,7 @@ def plot_evol(timesteps, masses, forest_tbl, mm_times = [[], []], filename = "ne
     
     # Display major mergers (if desired)
     # Only works for non_binned results, really...
-    if mm_times != [[]]: # Does this handle both positions? Or only one, really?
+    if mm_times != [[], []]: # Does this handle both positions? Or only one, really?
         color2 = iter(cm.jet(np.linspace(0,1,len(mm_times)))) # Bin colors again
         
         # Loop over each halo
@@ -431,36 +457,41 @@ def find_LMMs_binned(binned_major_mergers, binned_major_merger_times, forest_tbl
 # PDF of last major mergers at different timesteps #
 ####################################################
 
-def plot_LMMs(LMM_times, mass_bins = [], mass_range = [], x_axis = 'z_nums'): # Note: assume LMM_times are binned
-    # How can I make this more efficient?
+def plot_LMMs(LMM_times_raw, thresholds, bins = [], mass_range = [], x_axis = 'z_nums'): # Note: assume LMM_times are binned
+
+    # Rearrange, get rid of any "nones", and convert to z's if needed:
+    if x_axis == 'z_nums':
+        LMM_times = [[[redshifts[int(100 - this_halo[i])] for this_halo in this_bin if this_halo[i] is not None] for this_bin in LMM_times_raw] for i in range(len(thresholds))] 
+    elif x_axis == 'snap_nums':
+        LMM_times = [[[this_halo[i] for this_halo in this_bin if this_halo[i] is not None] for this_bin in data_raw] for i in range(len(thresholds))]
     
     # Fix the dims of LMM_times
-    LMM_times_small_thresh = [[LMM_times[i][j][0] for j in range(len(LMM_times[i]))] for i in range(len(LMM_times))]
-    LMM_times_big_thresh = [[LMM_times[i][j][1] for j in range(len(LMM_times[i])) if len(LMM_times[i][j][1]) != 0] for i in range(len(LMM_times))]
-    re_LMM_times = [[LMM_times_small_thresh[i], LMM_times_big_thresh[i]] for i in range(len(LMM_times))]
+    #LMM_times_small_thresh = [[LMM_times[i][j][0] for j in range(len(LMM_times[i]))] for i in range(len(LMM_times))]
+    #LMM_times_big_thresh = [[LMM_times[i][j][1] for j in range(len(LMM_times[i])) if len(LMM_times[i][j][1]) != 0] for i in range(len(LMM_times))]
+    #re_LMM_times = [[LMM_times_small_thresh[i], LMM_times_big_thresh[i]] for i in range(len(LMM_times))]
     
     # Change everything to redshifts
-    LMM_z_times = [[[redshifts[int(100 - re_LMM_times[this_bin][this_thresh][this_mm])] for this_mm in range(len(re_LMM_times[this_bin][this_thresh]))] for this_thresh in range(len(re_LMM_times[this_bin]))] for this_bin in range(len(re_LMM_times))]
+    #LMM_z_times = [[[redshifts[int(100 - re_LMM_times[this_bin][this_thresh][this_mm])] for this_mm in range(len(re_LMM_times[this_bin][this_thresh]))] for this_thresh in range(len(re_LMM_times[this_bin]))] for this_bin in range(len(re_LMM_times))]
     
     # Calculate histogram of LMM_times, plot as a distribution
     fig, ax = plt.subplots()
-    color = iter(cm.jet(np.linspace(0,1,len(LMM_z_times))))
+    color = iter(cm.jet(np.linspace(0,1,len(bins) - 1)))
     
     # Plot once for each bin
-    for i in np.arange(len(LMM_z_times)):
+    for bin_n in range(len(bins) - 1):
         current_color = next(color)
         
         # Plot once for each threshold
-        for j in np.arange(len(LMM_z_times[i])): # length is 2
-            norm_factor = len(LMM_z_times[i][j])
-            hist = np.histogram(LMM_z_times[i][j])
+        for i, this_threshold in enumerate(LMM_times): # length is 2
+            norm_factor = len(this_threshold[bin_n])
+            hist = np.histogram(this_threshold[bin_n])
             bin_centers = (hist[1][:-1] + hist[1][1:]) / 2
             
-            if j == 0:
+            if i == 0:
                 ax.plot(bin_centers, hist[0]/norm_factor, linestyle = '--', color = current_color)
-            elif j == 1:
-                if mass_bins != []:
-                    ax.plot(bin_centers, hist[0]/norm_factor, linestyle = '-', color = current_color, label = ("bin " + str(i + 1) + ": (" + "{:.2e}".format(mass_bins[i]) + " to " + "{:.2e}".format(mass_bins[i+1]) + ")"))
+            elif i == 1:
+                if bins != []:
+                    ax.plot(bin_centers, hist[0]/norm_factor, linestyle = '-', color = current_color, label = ("bin " + str(bin_n + 1) + ": (" + "{:.2e}".format(bins[bin_n]) + " to " + "{:.2e}".format(bins[bin_n+1]) + ")"))
                 else:
                     ax.plot(bin_centers, hist[0]/norm_factor, linestyle = '-', color = current_color)
     
@@ -494,64 +525,81 @@ def plot_LMMs(LMM_times, mass_bins = [], mass_range = [], x_axis = 'z_nums'): # 
 # Plot the probability that some data (X) will take on a value less than/equal to quantity (x) #
 ################################################################################################
 
-def plot_CDF(data_raw, comparison_data, bins = [], redshifts = redshifts, x_axis = 'z_nums'): # data = LMM_times, comp_data = binned_masses (because that gives us the total number of trees, including those without major mergers)
+def plot_CDF(data_raw, comparison_data, thresholds, bins = [], redshifts = redshifts, x_axis = 'z_nums'): # data = LMM_times, comp_data = binned_masses (because that gives us the total number of trees, including those without major mergers)
+
+    # Rearrange and get rid of any "nones":
+    if x_axis == 'z_nums':
+        data = [[[redshifts[int(100 - this_halo[i])] for this_halo in this_bin if this_halo[i] is not None] for this_bin in data_raw] for i in range(len(thresholds))] 
+    elif x_axis == 'snap_nums':
+        data = [[[this_halo[i] for this_halo in this_bin if this_halo[i] is not None] for this_bin in data_raw] for i in range(len(thresholds))] 
+    #for this_thresh in range(len(thresholds)):
+    #    for this_bin in range(len(data[this_thresh])):
+    #        print("for thresh: ", this_thresh, " and bin: ", this_bin, " halos with mms is: ", len(data[this_thresh][this_bin]))
+    
+    #for this_bin in range(len(comparison_data)):
+    #        print("for bin: ", this_bin, " all halos is: ", len(comparison_data[this_bin]))
+    #print(len(data_rearranged))
+    #print(len(data_rearranged[0]))
+    #print(len(data_rearranged[0][0]))
+    #print(len(data_rearranged[1]))
+    #print(len(data_rearranged[1][0]))
+    #print(data_rearranged[1][0])
+    # Are there ever any None values in the first threshold?
     
     # Change everything to redshifts
-    data = [[[redshifts[int(100 - data_raw[this_bin][this_thresh][this_mm])] for this_mm in range(len(data_raw[this_bin][this_thresh]))] for this_thresh in range(len(data_raw[this_bin]))] for this_bin in range(len(data_raw))]
+    #data = [[[redshifts[int(100 - this_mm_time)] for k, this_halo in enumerate(this_bin)] for j, this_bin in enumerate(this_thresh)] for i, this_thresh in enumerate(data_rearranged)]
+    #data = [[[redshifts[int(100 - this_mm_time)] for k, this_mm_time in enumerate(this_thresh)] for j, this_thresh in enumerate(this_bin)] for i, this_bin in enumerate(data_raw)]
     
     fig, ax = plt.subplots()
-    color = iter(cm.jet(np.linspace(0,1,len(data))))
-    #hist_bins = np.concatenate([redshifts[0]], [(redshifts[i] + redshifts[i + 1]) / 2 for i in np.arange(len(redshifts) - 1)], redshifts[-1])
-    
+    color = iter(cm.jet(np.linspace(0,1,len(comparison_data))))
+                
     # Loop over each bin
-    for i in range(len(data)):
+    for bin_n in range(len(bins) - 1):
         current_color = next(color)
-        print("\nfor bin: ", i, " # of halos is: ", len(comparison_data[i]))
+        linestyles = iter(['--', '-'])
         
         # Loop over each threshold
-        for j in range(len(data[i])):
+        for j, this_thresh in enumerate(data):
+            this_linestyle = next(linestyles)
             
-            data_sorted = np.sort(data[i][j]) # Should automatically sort along the last axis
-            #print("for j: ", j, " data_sorted is: ", data_sorted)
+            data_sorted = np.sort(this_thresh[bin_n]) # Should automatically sort along the last axis
             hist_keys = [key for key, group in groupby(data_sorted)] # Redshift values
-            print("for j: ", j, " hist_keys is: ", hist_keys)
             hist_values = [len(list(group)) for key, group in groupby(data_sorted)] # Count of each redshift value
-            print("for j ", j,  " # halos with mergers is... ", sum(hist_values)) 
-            print("hist values is: ", hist_values)
             #cum_probs = [sum(hist_values[0:k]) / len(comparison_data[i]) for k in range(len(hist_values))]
-            cum_probs = np.cumsum(hist_values) / len(comparison_data[i])
-            print("cum probs is: ", cum_probs)
-            #for l in range(len(hist_values)):
-            #    print("hist_values[", 0, ":", l, "]: ", hist_values[0:l])
-            #    print("cum_probs[", l, "]: ", cum_probs[l])
+            cum_probs = np.cumsum(hist_values) / len(comparison_data[bin_n])
+            
             if j == 0:
-                ax.plot(hist_keys, cum_probs, color = current_color, linestyle = '--')
+                ax.plot(hist_keys, cum_probs, color = current_color, linestyle = this_linestyle)
             elif j == 1:
-                ax.plot(hist_keys, cum_probs, color = current_color, linestyle = '-', label = ("bin " + str(i + 1) + ": (" + "{:.2e}".format(bins[i]) + " to " + "{:.2e}".format(bins[i+1]) + ")"))
+                ax.plot(hist_keys, cum_probs, color = current_color, linestyle = this_linestyle, label = ("bin " + str(bin_n + 1) + ": (" + "{:.2e}".format(bins[bin_n]) + " to " + "{:.2e}".format(bins[bin_n+1]) + ")"))
     
+    # Accessorize
     if x_axis == 'z_nums':
         ax.set_xlabel("Redshift of LMM")
+        ax.set_xscale("symlog", linthresh = 1, linscale = 0.4)
+        
+        # Unnecessarily Complicated Tick Marks
+        stepsize = 1
+        start, end = ax.get_xlim()
+        ax.xaxis.set_ticks(np.arange(0, end, stepsize))
+        for axis in [ax.xaxis, ax.yaxis]:
+            axis.set_major_formatter(ScalarFormatter())
+            
     elif x_axis == 'snap_nums':
         ax.set_xlabel("Snapnum of LMM")
         
     ax.set_ylabel("Probability")
     ax.set_title("Cumulative Probability Distribution of LMMs")
-    ax.set_xscale("symlog", linthresh = 1, linscale = 0.4)
-    
-    # Unnecessarily Complicated Tick Marks
-    stepsize = 1
-    start, end = ax.get_xlim()
-    ax.xaxis.set_ticks(np.arange(0, end, stepsize))
-    for axis in [ax.xaxis, ax.yaxis]:
-        axis.set_major_formatter(ScalarFormatter())
     
     # Unnecessarily Complicated Legend
     leg1 = ax.legend(loc='lower right')
-    dashed_line = Line2D([0,1],[0,1],linestyle='--', color="black")
-    solid_line = Line2D([0,1],[0,1],linestyle='-', color="black")
+    dashed_line = Line2D([0,1],[0,1], linestyle='--', color="black")
+    solid_line = Line2D([0,1],[0,1], linestyle='-', color="black")
     leg2 = ax.legend((dashed_line, solid_line), ('ε > 0.1', 'ε > 0.3'), loc = 'center right')
     # Manually add the first legend back
     ax.add_artist(leg1)
+    
+    # Save
     plt.savefig("cdf_large_range.png")
     plt.show()
 
