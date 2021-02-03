@@ -1,0 +1,22 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+
+forest_table = pd.read_hdf('/data/a/cpac/aurora/reducedtrees0.h5', 'ft')
+with open("/data/a/cpac/xinliu/reducedtrees/progenitor_idx0.txt") as f:
+    progenitor_idx = [[int(p) for p in s.strip().split(" ")] if s.strip() != "" else [] for s in f]
+
+# I would like to get a list of how many individual clusters are in this tree and where they are located
+
+def count_clusters(progenitor_idx):
+	count = 0
+	cluster_idx = np.empty(0)
+	for i in np.arange(0, len(progenitor_idx)):
+		if len(progenitor_idx[i]) and not len(progenitor_idx[i + 1]):	
+			count = count + 1
+			cluster_idx = np.append(cluster_idx, [i]) # Appends cluster_idx with final location of the cluster (just before there is a new progenitor)
+	return count, cluster_idx
+
+count, cluster_idx = count_clusters(progenitor_idx)
+print("Count is: ", count)
+print("The clusters are located: \n", cluster_idx)
