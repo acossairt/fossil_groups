@@ -78,7 +78,7 @@ def get_branches(target_idx, forest):
 # New (and easier!) version of track_evol #
 ###########################################
 
-def get_branches_binned(target_idx, forest, snap = 100):
+def get_binned_branches(target_idx, forest, snap = 100):
 
     mainbranch_binned_index = []
     mainbranch_binned_masses = []
@@ -150,22 +150,20 @@ def get_mergers(forest, progenitor_array, mainbranch_index, absolute_threshold =
         mergers[merger_mask] = forest['tree_node_mass'][main_merger_index[merger_mask]]
     
     # if desired, return only the major mergers
-    if major_mergers_only == False:
-        mergers_index = main_merger_index[merger_mask]
-        LM = mergers_index[-1]
-        return mergers, mergers_index, LM
-    else:
+    if major_mergers_only:
         major_merger_mask = merger_mask & (mergers >= merger_threshold)
         major_mergers = mergers[major_merger_mask]
         major_mergers_index = main_merger_index[major_merger_mask]
-        LMM = major_mergers_index[-1]
-        return major_mergers, major_mergers_index, LMM
+        return major_mergers, major_mergers_index
+    else:
+        mergers_index = mergers[merger_mask]
+        return mergers, mergers_index
     
 ############################################
 # Get mergers (major or otherwise) in bins #
 ############################################
 
-def get_mergers_binned(forest, progenitor_array, mainbranch_index, absolute_threshold = False, major_mergers_only = False, merger_threshold = 0.3): # Assume mainbranch_index is binned
+def get_binned_mergers(forest, progenitor_array, mainbranch_index, absolute_threshold = False, major_mergers_only = False, merger_threshold = 0.3): # Assume mainbranch_index is binned
     
     binned_mergers = []
     binned_mergers_index = []
@@ -177,6 +175,214 @@ def get_mergers_binned(forest, progenitor_array, mainbranch_index, absolute_thre
     
     return binned_mergers, binned_mergers_index
 
+###########################
+# Get mergers, second way #
+###########################
+
+def get_mainbranch_mergers(forest, progenitor_array, mainbranch_index, absolute_threshold = False):
+
+    # mask out indices of the mainbranch where there are no halos
+    active_mask = mainbranch_index != -1
+    
+    # get indices to secondary progenitors (main mergers)
+    main_merger_index = haccytrees.mergertrees.get_nth_progenitor_indices(
+        forest, progenitor_array, target_index=mainbranch_index[active_mask], n=2
+    )
+    
+    # the index will be negative if there's no merger, mask those out
+    merger_mask = main_merger_index >= 0
+    
+    # allocate an array containing merging info for each halo at each snapshot of its life
+    mainbranch_merger = np.zeros_like(mainbranch_index, dtype=np.float32)
+
+    if absolute_threshold == True:
+        mainbranch_merger[active_mask] = forest['tree_node_mass'][main_merger_index] # merger_mask
+    elif absolute_threshold == False:
+        main_progenitor_index = haccytrees.mergertrees.get_nth_progenitor_indices(
+            forest, progenitor_array, target_index=mainbranch_index[active_mask], n=1
+        )
+        mainbranch_merger[tuple(np.argwhere(active_mask)[merger_mask].T)] = forest['tree_node_mass'][main_merger_index[merger_mask]] / forest['tree_node_mass'][main_progenitor_index[merger_mask]]
+        
+    return mainbranch_merger
+
+###########################################
+# Get mainbranch mergers in multiple bins #
+###########################################
+
+def get_binned_mainbranch_mergers(forest, progenitor_array, binned_mainbranch_index, absolute_threshold = False):
+    
+    binned_mainbranch_mergers = []
+    
+    for this_bin in binned_mainbranch_index:
+        mainbranch_merger = get_mainbranch_mergers(forest, progenitor_array, this_bin, absolute_threshold)
+        binned_mainbranch_mergers.append(mainbranch_merger)
+    
+    return binned_mainbranch_mergers
+    
+###############################################
+# A bunch of get functions related to mergers #
+###############################################
+
+def get_major_mergers(mainbranch_mergers, threshold = 5e12): # Another common threshold is 0.3
+    
+    mm_mask = mainbranch_mergers > threshold # Major mergers mask
+    mainbranch_mergers[~mm_mask] = 0 # Set all non- major mergers to zero
+    return mainbranch_mergers # These are now major mergers!
+
+def get_binned_major_mergers(binned_mainbranch_mergers, threshold = 5e12):
+    
+    binned_mms = []
+    for this_bin in binned_mainbranch_mergers:
+        major_mergers = get_major_mergers(this_bin, threshold)
+        binned_mms.append(major_mergers)
+        
+    return binned_mms
+    
+def get_lmms(mainbranch_mergers, threshold = 5e12): # Another common threshold is 0.3
+
+    mm_mask = mainbranch_mergers > threshold
+    
+    # Find last snapnum of the simulation
+    simulation = haccytrees.Simulation.simulations['LastJourney']
+    scale_factors = simulation.step2a(np.array(simulation.cosmotools_steps))
+    last_snap = len(simulation.cosmotools_steps) - 1
+    
+    # Find snapnum of the LAST major merger for each halo
+    last_mm_index = last_snap - np.argmax((mainbranch_mergers > threshold)[:, ::-1], axis=1)
+    last_mm_redshift = 1/scale_factors[last_mm_index] - 1
+
+    # mark all halos without any major merger with a last_mm_redshift of -1
+    #last_mm_redshift[~np.any(mm_mask, axis=1)] = -1 # Will this do anything? I thought last_mm_redshift was already masked to make sure it always included mergers
+
+    return last_mm_redshift
+
+def get_binned_lmms(binned_mainbranch_mergers, threshold = 5e12):
+    
+    binned_lmms = []
+    for this_bin in binned_mainbranch_mergers:
+        lmms = get_lmms(this_bin, threshold)
+        binned_lmms.append(lmms)
+        
+    return binned_lmms
+
+def get_merger_times(forest, mainbranch_mergers, mainbranch_index): # Should work for both major and non-major mergers
+    
+    # Mask out entries where no merger occurred 
+    mask = mainbranch_mergers > 0
+    
+    # Transform mainbranch_index into an index of snapnums:
+    # apply the mask, then replace nonzeros with snapnums
+    merger_times = mainbranch_index # Does it make sense to rename as I do here?
+    merger_times[~mask] = 0
+    merger_times[mask] = forest['snapnum'][merger_times[mask]] 
+    aggregate_merger_times = merger_times[merger_times != 0] # 1D array of just the times, no index information
+    
+    return merger_times, aggregate_merger_times
+
+def get_binned_merger_times(forest, binned_mainbranch_mergers, binned_mainbranch_index): # Better to put forest in front or back?
+    # Make a mask for the nonzeros (we need to get to times)
+    
+    binned_merger_times = []
+    binned_aggregate_merger_times = []
+    for i, this_mainbranch_merger in enumerate(binned_mainbranch_mergers):
+        merger_times, aggregate_merger_times = get_merger_times(forest, this_mainbranch_merger, binned_mainbranch_index[i]) # Inconsistent syntax?
+        binned_merger_times.append(merger_times)
+        binned_aggregate_merger_times.append(aggregate_merger_times)
+        
+    return binned_merger_times, binned_aggregate_merger_times
+
+def get_aggregate_mergers(forest, progenitor_array, mainbranch_mergers, mainbranch_index, absolute_threshold = False, major_mergers_only = False, merger_threshold = 0.3):
+    
+    # mask out indices of the mainbranch where there are no halos
+    active_mask = mainbranch_index != -1
+    
+    # if using ratios, get indices to main progenitors
+    if absolute_threshold == False:
+        main_progenitor_index = haccytrees.mergertrees.get_nth_progenitor_indices(
+            forest, progenitor_array, target_index=mainbranch_index[active_mask], n=1
+        )
+
+    # get indices to secondary progenitors (main mergers)
+    main_merger_index = haccytrees.mergertrees.get_nth_progenitor_indices(
+        forest, progenitor_array, target_index=mainbranch_index[active_mask], n=2
+    )
+
+    # the index will be negative if there's no merger, mask those out
+    merger_mask = main_merger_index >= 0
+    
+    # allocate an array for merger ratios or masses, 0 by default
+    mergers = np.zeros_like(main_merger_index, dtype=np.float32)
+
+    # fill the elements for which a merger occurred with the mass ratio...
+    if absolute_threshold == False:
+        mergers[merger_mask] = forest['tree_node_mass'][main_merger_index[merger_mask]] / forest['tree_node_mass'][main_progenitor_index[merger_mask]]
+    # ... or the mass
+    else:
+        mergers[merger_mask] = forest['tree_node_mass'][main_merger_index[merger_mask]]
+    
+    # if desired, return only the major mergers, in a 1D array (?)
+    if major_mergers_only == True:
+        major_merger_mask = merger_mask & (mergers >= merger_threshold)
+        major_mergers = mergers[major_merger_mask]
+        major_mergers_index = main_merger_index[major_merger_mask]
+        return major_mergers, major_mergers_index
+    elif major_mergers_only == False:
+        mergers_index = main_merger_index[merger_mask]
+        return mergers, mergers_index
+    
+#################################################################
+# Calculate Cumulative Number of Major Mergers: (just one halo) #
+# Find redshifts associated with each major merger;             #
+# Count and average number of major mergers at each redshift    #
+#################################################################
+
+def calc_cum_lum_mergers(mm_times, redshifts = redshifts): # Note: assume mm_times is 2D matrix
+
+    # Collapse along columns, count cums, then average
+    mms_binary = mm_times > 0
+    mms_per_time = np.add.reduce(mms_binary)
+    cum_mms = np.cumsum(mms_per_time)
+    avg_cum_mms = cum_mms/len(mm_times)
+    return avg_cum_mms
+
+def OLD_calc_cum_lum_mergers(mm_times, redshifts = redshifts): # Note: assume major_mergers is for just one bin, is a 1D agg count
+    
+    # 1) Option 1
+    # Order the mm_times
+    sorted_times = np.sort(mm_times)
+    unique_times = np.unique(sorted_times)
+    
+    # For all timesteps, count # of mms that took place between 0 and z
+    for this_z in unique_times:
+        for i in sorted_times:
+            return 0
+    
+    # 2) Option 2
+    # This loop thing from before?
+    mask = []
+    for this_halo in mm_times:
+        a = []
+        for z in redshifts:
+            b = []
+            for this_timestep in this_halo:
+                (redshifts[100 - this_timestep] <= z)
+                
+    
+    # For all redshifts z, count # of mms that took place between 0 and z
+    mask = [[[(redshifts[100 - mm_times[halo_n][time_n]] <= z) for time_n in range(len(mm_times[halo_n]))] for z in redshifts] for halo_n in range(len(mm_times))]
+    
+    # Count the true values in the mask
+    cum_lms = [[mask[i][k].count(True) for k in range(len(mask[i]))] for i in range(len(lum_merger_times))] 
+    return cum_lms # dim: 2 thresholds, 101 z's, some # MMs (T/F values)
+    
+
+def avg_cum_lum_mergers(lum_merger_times, redshifts): # Note: assume major_mergers contains multiple halos
+    
+    cum_lms = [calc_cum_lum_mergers(lum_merger_times[i], redshifts) for i in range(len(lum_merger_times))] # One for each halo
+    avg = [np.average([cum_lms[i][j] for i in np.arange(len(cum_lms))], axis = 0) for j in range(len(cum_lms[0]))] # Kind of cheating... hard-coded to get the right length for the loop (2)
+    
+    return avg
+    
 ##################
 # Find LMMs/LLMs #
 ##################
@@ -340,13 +546,13 @@ def plot_evol(masses, mm_times = [], thresholds = [], filename = "new_plot", bin
 # Now customized for one threshold, compare fgs to whole dataset #
 ##################################################################
 
-def plot_LLMs(LLM_times_raw, thresholds, bins, bin_labels = [], cust_legend = [], mass_range = [], x_axis = 'z_nums', fig = None, ax = None, **kwargs): # Note: assume LMM_times are binned
+def plot_LMMs(LMM_times, bins, bin_labels = [], cust_legend = [], mass_range = [], x_axis = 'z_nums', fig = None, ax = None, **kwargs): # Note: assume LMM_times are binned
 
     # Rearrange, get rid of any "nones", and convert to z's if needed:
-    if x_axis == 'z_nums':
-        LLM_times = [[[redshifts[int(100 - this_halo[i])] for this_halo in this_bin if this_halo[i] is not None] for this_bin in LLM_times_raw] for i in range(len(thresholds))] 
-    elif x_axis == 'snap_nums':
-        LLM_times = [[[this_halo[i] for this_halo in this_bin if this_halo[i] is not None] for this_bin in LLM_times_raw] for i in range(len(thresholds))]
+    #if x_axis == 'z_nums':
+    #    LLM_times = [[[redshifts[int(100 - this_halo[i])] for this_halo in this_bin if this_halo[i] is not None] for this_bin in LLM_times_raw] for i in range(len(thresholds))] 
+    #elif x_axis == 'snap_nums':
+    #    LLM_times = [[[this_halo[i] for this_halo in this_bin if this_halo[i] is not None] for this_bin in LLM_times_raw] for i in range(len(thresholds))]
         
     if ax is None:
         fig, ax = plt.subplots()
@@ -358,27 +564,25 @@ def plot_LLMs(LLM_times_raw, thresholds, bins, bin_labels = [], cust_legend = []
     bin_legend_handles = []
     
     # Plot once for each bin
+    
     for bin_n in range(len(bins) - 1):
         current_color = next(color)
         
-        # Plot once for each threshold
-        for i, this_threshold in enumerate(LLM_times): # length is 2
-            norm_factor = len(this_threshold[bin_n])
-            hist = np.histogram(this_threshold[bin_n])
-            bin_centers = (hist[1][:-1] + hist[1][1:]) / 2
-            ax.plot(bin_centers, hist[0]/norm_factor, color = current_color, **kwargs)
-            if i == 0:
-                if bin_labels == []:
-                    bin_legend_handles.append(mpatches.Patch(color=current_color, label="bin " + str(bin_n + 1) + ": (" + "{:.2e}".format(bins[bin_n]) + " to " + "{:.2e}".format(bins[bin_n+1]) + ")"))
-                else:
-                    bin_legend_handles.append(mpatches.Patch(color=current_color, label=bin_labels[bin_n]))
+        norm_factor = len(LMM_times[bin_n])
+        hist = np.histogram(LMM_times[bin_n])
+        bin_centers = (hist[1][:-1] + hist[1][1:]) / 2
+        ax.plot(bin_centers, hist[0]/norm_factor, color = current_color, **kwargs)
+        if bin_labels == []:
+            bin_legend_handles.append(mpatches.Patch(color=current_color, label="bin " + str(bin_n + 1) + ": (" + "{:.2e}".format(bins[bin_n]) + " to " + "{:.2e}".format(bins[bin_n+1]) + ")"))
+        else:
+            bin_legend_handles.append(mpatches.Patch(color=current_color, label=bin_labels[bin_n]))
     
     # Set customized labels and titles
     if x_axis == 'z_nums':
-        ax.set_xlabel("Redshift of LLM")
+        ax.set_xlabel("Redshift of LMM")
         ax.set_xscale('symlog')
     elif x_axis == 'snap_nums':
-        ax.set_xlabel("snapnum of LLM")
+        ax.set_xlabel("snapnum of LMM")
     if mass_range != []:
         ax.set_title("PDF of Last Luminous Mergers in range: " + "{:.1e}".format(mass_range[0]) + " to " + "{:.1e}".format(mass_range[1]))
     elif mass_range == []:
@@ -409,48 +613,45 @@ def plot_LLMs(LLM_times_raw, thresholds, bins, bin_labels = [], cust_legend = []
 # Now optimized for one threshold, comparing fgs to whole dataset                              #
 ################################################################################################
 
-def plot_CDF(data_raw, comparison_data, thresholds, bins = [], bin_labels = [], cust_legend = [], redshifts = redshifts, x_axis = 'z_nums', fig = None, ax = None, z_end = None, **kwargs): # data = LLM_times, comp_data = binned_masses (because that gives us the total number of trees, including those without major mergers) -- isn't there a better way to do that part?
+def plot_CDF(data, bins = [], bin_labels = [], cust_legend = [], redshifts = redshifts, x_axis = 'z_nums', fig = None, ax = None, z_end = None, **kwargs): # data = LLM_times, comp_data = binned_masses (because that gives us the total number of trees, including those without major mergers) -- isn't there a better way to do that part?
 
     # Rearrange and get rid of any "nones":
-    if x_axis == 'z_nums':
-        data = [[[redshifts[int(100 - this_halo[i])] for this_halo in this_bin if this_halo[i] is not None] for this_bin in data_raw] for i in range(len(thresholds))]
-    elif x_axis == 'snap_nums':
-        data = [[[this_halo[i] for this_halo in this_bin if this_halo[i] is not None] for this_bin in data_raw] for i in range(len(thresholds))]
+    #if x_axis == 'z_nums':
+    #    data = [[[redshifts[int(100 - this_halo[i])] for this_halo in this_bin if this_halo[i] is not None] for this_bin in data_raw] for i in range(len(thresholds))]
+    #elif x_axis == 'snap_nums':
+    #    data = [[[this_halo[i] for this_halo in this_bin if this_halo[i] is not None] for this_bin in data_raw] for i in range(len(thresholds))]
     
     # Get ready to plot
     if ax is None:
         fig, ax = plt.subplots()
     else:
         fig = ax.figure
-    color = iter(cm.jet(np.linspace(0,1,len(comparison_data))))
+    color = iter(cm.jet(np.linspace(0,1,len(data)))) # used to be comparison_data
     bin_legend_handles = []
     
     # Loop over each bin
-    for bin_n in range(len(bins) - 1):
-        current_color = next(color)
+    for bin_n, this_bin in enumerate(data):
+        current_color = next(color) # Used to loop over thresholds right after this
         
-        # Loop over each threshold
-        for i, this_thresh in enumerate(data):
-            
-            # Plot
-            data_sorted = np.sort(this_thresh[bin_n]) # Should automatically sort along the last axis
-            hist_keys = [key for key, group in groupby(data_sorted)] # Redshift values
-            hist_values = [len(list(group)) for key, group in groupby(data_sorted)] # Count of each redshift value
-            cum_probs = np.cumsum(hist_values) / len(comparison_data[bin_n])
-            
-            if z_end is not None:
-                hist_keys = np.append(hist_keys, z_end)
-                cum_probs = np.append(cum_probs, cum_probs[-1])
-                
-            ax.plot(hist_keys, cum_probs, color = current_color, **kwargs)
-            
-            if i == 0:
-                if bin_labels == []:
-                    bin_legend_handles.append(mpatches.Patch(color=current_color, label="bin " + str(bin_n + 1) + ": (" + "{:.2e}".format(bins[bin_n]) + " to " + "{:.2e}".format(bins[bin_n+1]) + ")"))
-                else:
-                    bin_legend_handles.append(mpatches.Patch(color=current_color, label = bin_labels[bin_n]))
+        # Plot
+        data_sorted = np.sort(this_bin) # Should automatically sort along the last axis
+        hist_keys = [key for key, group in groupby(data_sorted)] # Redshift values
+        hist_values = [len(list(group)) for key, group in groupby(data_sorted)] # Count of each redshift value
+        cum_probs = np.cumsum(hist_values) / len(data[bin_n]) # used to be comparison_data
+
+        if z_end is not None:
+            hist_keys = np.append(hist_keys, z_end)
+            cum_probs = np.append(cum_probs, cum_probs[-1])
+
+        ax.plot(hist_keys, cum_probs, color = current_color, **kwargs)
+
+        if bin_labels == []:
+            bin_legend_handles.append(mpatches.Patch(color=current_color, label="bin " + str(bin_n + 1) + ": (" + "{:.2e}".format(bins[bin_n]) + " to " + "{:.2e}".format(bins[bin_n+1]) + ")"))
+        else:
+            bin_legend_handles.append(mpatches.Patch(color=current_color, label = bin_labels[bin_n]))
     
     # Accessorize
+    ax.set_title("CDF of Last Luminous Mergers")
     ax.set_ylabel("Probability")
     
     if x_axis == 'z_nums':
