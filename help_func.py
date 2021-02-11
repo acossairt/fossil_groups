@@ -73,6 +73,7 @@ def bin_halos(forest_table, sn, bins):
     
     # Assign a bin number to each halo
     bin_idx = np.digitize(masses_sn, bins)
+    print(bins)
     
     # Build list of all halos associated with each bin
     halo_idx = [halo_ids_sn[bin_idx == j] for j in range(1, len(bins))]
@@ -102,7 +103,8 @@ def track_evol(idx, redshifts, prog_idx, forest_masses, forest_snap_nums, thresh
     while len(progenitors) > 0:
         masses = [forest_masses[i] for i in progenitors] # Find masses for each progenitor of the halo at this time step
         main_progenitor = progenitors[np.argmax(masses)]
-        z_current = redshifts[100 - forest_snap_nums[main_progenitor]]
+        #print(forest_snap_nums[main_progenitor])
+        z_current = redshifts[100 - (forest_snap_nums[main_progenitor] + 1)]
         main_progenitor_list.append(main_progenitor)
 
         # Count major mergers
@@ -688,8 +690,38 @@ def calc_cum_lum_mergers(lum_merger_times, redshifts): # Note: assume major_merg
     
     # For all redshifts z, count # of mms that took place between 0 and z
     mask = [[[(redshifts[100 - lum_merger_times[halo_n][time_n]] <= z) for time_n in range(len(lum_merger_times[halo_n]))] for z in redshifts] for halo_n in range(len(lum_merger_times))]
+    #print(mask, "\n")
+    #print(len(mask))
+    #print(len(mask[0]))
+    #print(len(mask[0][0]))
+    #print(mask[0][0])
+    # Loop version
+    #mask = []
+    #for halo_n in range(len(lum_merger_times)): # num halos
+    #    a = []
+    #    for z in redshifts: # each redshift, starting with present day
+    #        b = []
+    #        #print("about to loop over ", range(len(lum_merger_times[halo_n])))
+    #        for time_n in range(len(lum_merger_times[halo_n])): # Each snap num of that halo's life? But actually only 7... Or 3... so maybe it's the number of positions where they had a major merger??
+    #            this_mask = redshifts[100 - lum_merger_times[halo_n][time_n]] <= z # was that snap_num less than this redshift? (mask should look like a triangle)
+    #            b.append(this_mask) # so each mask row has T/Fs
+    #        #print("z is: ", z)
+    #        #print("mask so far is: ", b)
+    #        a.append(b)
+    #    print("for halo num: ", halo_n, " mask so far is:\n", a)
+    #    mask.append(a)
+        
     # Count the true values in the mask
-    cum_lms = [[mask[i][k].count(True) for k in range(len(mask[i]))] for i in range(len(lum_merger_times))] 
+    cum_lms = [[mask[i][k].count(True) for k in range(len(mask[i]))] for i in range(len(lum_merger_times))]
+    
+    # Loop version
+    #cum_lms = []
+    #for i in range(len(lum_merger_times)): # num halos?
+    #    a = []
+    #    for k in range(len(mask[i])): # length of mask for that halo? (basically the same as saying "for each snap num")
+    #        this_cum_sum = mask[i][k].count(True)
+    #        a.append(this_cum_sum)
+    #    cum_lms.append(a)
     
     return cum_lms # dim: 2 thresholds, 101 z's, some # MMs (T/F values)
     
@@ -701,8 +733,23 @@ def calc_cum_lum_mergers(lum_merger_times, redshifts): # Note: assume major_merg
 def avg_cum_lum_mergers(lum_merger_times, redshifts): # Note: assume major_mergers contains multiple halos
     
     cum_lms = [calc_cum_lum_mergers(lum_merger_times[i], redshifts) for i in range(len(lum_merger_times))] # One for each halo
-    avg = [np.average([cum_lms[i][j] for i in np.arange(len(cum_lms))], axis = 0) for j in range(len(cum_lms[0]))] # Kind of cheating... hard-coded to get the right length for the loop (2)
+    #print(cum_lms)
+    #avg = [np.average([cum_lms[i][j] for i in np.arange(len(cum_lms))], axis = 0) for j in range(len(cum_lms[0]))] # Kind of cheating... hard-coded to get the right length for the loop (2)
     
+    # Loop way
+    avg = []
+    #print("range")
+    print(range(len(cum_lms[0])))
+    for j in range(len(cum_lms[0])): # Loop over each thresh
+        a = []
+        print(np.arange(len(cum_lms)))
+        for i in np.arange(len(cum_lms)): # Loop over each time?
+            this_cum = cum_lms[i][j]
+            a.append(this_cum)
+        avg.append(np.average(a, axis = 0))
+    print(len(avg))
+    print(len(avg[0]))
+    print(avg)
     return avg
 
 #################################################################
@@ -737,6 +784,7 @@ def plot_cum_lms(binned_averages, bins, thresholds, bin_labels = [], cust_legend
         current_color = next(color)
         
         for thresh_n in range(len(thresholds)): # Loop over thresholds
+            #print(binned_averages[bin_n][thresh_n])
             ax.plot(redshifts, binned_averages[bin_n][thresh_n], color = current_color, **kwargs)
             
             if thresh_n == 0:
