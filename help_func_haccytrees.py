@@ -11,8 +11,10 @@
 import haccytrees.mergertrees
 import haccytools.mergertrees.visualization
 import pickle
+import math
 import numpy as np
 import pandas as pd
+import numpy.fft as fft
 import astropy.units as u
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
@@ -30,11 +32,11 @@ redshifts = np.flip(np.array([10.044, 9.8065, 9.5789, 9.3608, 9.1515, 8.7573, 8.
 # return an index of halo id's whose mass values fall into the given range    #
 ###############################################################################
 
-def find_halos(forest, mlim, sn = 100):
+def find_halos(forest, mlims, sn = 100):
         
     z0_mask = forest['snapnum'] == sn
-    target_mask = z0_mask & (forest['tree_node_mass'] > mlim[0]) * (forest['tree_node_mass'] < mlim[1])
-    target_idx = (forest['halo_index'][target_mask])
+    target_mask = z0_mask & (forest['tree_node_mass'] > mlims[0]) * (forest['tree_node_mass'] < mlims[1])
+    target_idx = (forest['halo_index'][target_mask]) # Why these parentheses?
     return target_idx
    
 #############################################################################
@@ -58,7 +60,7 @@ def bin_halos(forest, mbins, sn = 100):
 # New (and easier!) version of track_evol #
 ###########################################
 
-def get_branches(target_idx, forest):
+def get_branches(target_idx, forest, normalized = False):
 
     # this will create a matrix of shape (ntargets, nsteps), where each column
     # is the main progenitor branch of a target. It contains the indices to the
@@ -66,20 +68,25 @@ def get_branches(target_idx, forest):
     mainbranch_index = haccytrees.mergertrees.get_mainbranch_indices(
         forest, simulation='LastJourney', target_index=target_idx
     )
+    print("mainbranch_index shape: ", mainbranch_index.shape)
 
     active_mask = mainbranch_index != -1
     mainbranch_mass = np.zeros_like(mainbranch_index, dtype=np.float32)
     mainbranch_mass[active_mask] = forest['tree_node_mass'][mainbranch_index[active_mask]]
+    
+    if normalized == True:
+        #mainbranch_mass = mainbranch_mass / forest['tree_node_mass'][:, -1] # Doesn't need .values because there's just one
+        mainbranch_mass = mainbranch_mass / mainbranch_mass[:, [-1]]
 
     return mainbranch_index, mainbranch_mass
 
-def get_binned_branches(target_idx, forest, snap = 100):
+def get_binned_branches(binned_target_idx, forest, normalized = False, snap = 100):
 
     mainbranch_binned_index = []
     mainbranch_binned_masses = []
-
-    for i in range(len(target_idx)):
-        this_target_idx = target_idx[i]
+    
+    for i in range(len(binned_target_idx)):
+        this_target_idx = binned_target_idx[i]
 
         # this will create a matrix of shape (ntargets, nsteps), where each column
         # is the main progenitor branch of a target. It contains the indices to the
@@ -87,10 +94,14 @@ def get_binned_branches(target_idx, forest, snap = 100):
         mainbranch_index = haccytrees.mergertrees.get_mainbranch_indices(
             forest, simulation='LastJourney', target_index=this_target_idx
         )
-
+        print("mainbranch_index shape: ", mainbranch_index.shape)
+        
         active_mask = mainbranch_index != -1
         mainbranch_mass = np.zeros_like(mainbranch_index, dtype=np.float32)
-        mainbranch_mass[active_mask] = forest['fof_halo_mass'][mainbranch_index[active_mask]]
+        mainbranch_mass[active_mask] = forest['tree_node_mass'][mainbranch_index[active_mask]]
+        
+        if normalized == True:
+            mainbranch_mass = mainbranch_mass / mainbranch_mass[:, [-1]]
 
         mainbranch_binned_index.append(mainbranch_index)
         mainbranch_binned_masses.append(mainbranch_mass)
@@ -102,12 +113,12 @@ def get_binned_branches(target_idx, forest, snap = 100):
 # track the evolution of halos in bins, return the average masses of each bin #
 ###############################################################################
 
-def avg_mass_bins(masses, bins):
+def avg_mass_bins(masses):
     
     # Take the average over all the masses in each bin
     final_masses = final_timesteps = []
-    for i in range(len(bins) - 1): # Should be same as len(masses)
-        avg_masses = np.average(masses[i], axis = 0) # do I still need to specify axis = 0?
+    for this_bin_masses in masses: # Should be same as len(masses)
+        avg_masses = np.average(this_bin_masses, axis = 0) # do I still need to specify axis = 0?
         final_masses.append(avg_masses)
         
     return final_masses
@@ -127,9 +138,10 @@ def get_mainbranch_mergers(forest, progenitor_array, mainbranch_index, absolute_
     main_merger_index = haccytrees.mergertrees.get_nth_progenitor_indices(
         forest, progenitor_array, target_index=mainbranch_index[active_mask], n=2
     )
+    print("main_merger_index shape: ", main_merger_index.shape)
     
     # the index will be negative if there's no merger, mask those out
-    merger_mask = main_merger_index >= 0
+    merger_mask = main_merger_index >= 0 # Does this even get used? Only when absolute_threshold == False
     
     # allocate an array containing merging info for each halo at each snapshot of its life
     mainbranch_merger = np.zeros_like(mainbranch_index, dtype=np.float32)
@@ -141,6 +153,12 @@ def get_mainbranch_mergers(forest, progenitor_array, mainbranch_index, absolute_
         main_progenitor_index = haccytrees.mergertrees.get_nth_progenitor_indices(
             forest, progenitor_array, target_index=mainbranch_index[active_mask], n=1
         )
+        print("active mask: ", active_mask)
+        print("merger mask: ", merger_mask)
+        print("np.argwhere(active_mask): ", np.argwhere(active_mask))
+        print("(np.argwhere(active_mask)[merger_mask]: ", (np.argwhere(active_mask)[merger_mask]))
+        print("np.argwhere(active_mask)[merger_mask].T: ", np.argwhere(active_mask)[merger_mask].T)
+        print("tuple(np.argwhere(active_mask)[merger_mask].T): ", tuple(np.argwhere(active_mask)[merger_mask].T))
         mainbranch_merger[tuple(np.argwhere(active_mask)[merger_mask].T)] = forest['tree_node_mass'][main_merger_index[merger_mask]] / forest['tree_node_mass'][main_progenitor_index[merger_mask]]
         
     return mainbranch_merger
@@ -159,13 +177,14 @@ def get_binned_mainbranch_mergers(forest, progenitor_array, binned_mainbranch_in
 # Get major mergers #
 #####################
 
-def get_major_mergers(mainbranch_mergers, threshold = 5e12): # Another common threshold is 0.3
+def get_major_mergers(mainbranch_mergers, threshold = 5e11): # Another common threshold is 0.3
     
+    # Should really do a deep copy and change the name here
     mm_mask = mainbranch_mergers > threshold # Major mergers mask
     mainbranch_mergers[~mm_mask] = 0 # Set all non-major mergers to zero
     return mainbranch_mergers # These are now major mergers!
 
-def get_binned_major_mergers(binned_mainbranch_mergers, threshold = 5e12):
+def get_binned_major_mergers(binned_mainbranch_mergers, threshold = 5e11):
     
     binned_mms = []
     for this_bin in binned_mainbranch_mergers:
@@ -173,14 +192,25 @@ def get_binned_major_mergers(binned_mainbranch_mergers, threshold = 5e12):
         binned_mms.append(major_mergers)
         
     return binned_mms
+
+###########################
+# Find social butterflies #
+###########################
+
+def find_butterflies(major_mergers, threshold):
+    mm_count = major_mergers > 0 # how many major mergers occured?
+    major_mergers[mm_count > threshold]
+    
+    #for 
     
 #####################################
 # Get Last Major (Luminous) Mergers #
 #####################################
 
-def get_lmms(major_mergers, threshold = 5e12): # Another common threshold is 0.3
+def get_lmms(major_mergers, threshold = 5e11): # Another common threshold is 0.3
 
     mm_mask = major_mergers > threshold
+    
     # Find last snapnum of the simulation
     simulation = haccytrees.Simulation.simulations['LastJourney']
     scale_factors = simulation.step2a(np.array(simulation.cosmotools_steps))
@@ -196,7 +226,7 @@ def get_lmms(major_mergers, threshold = 5e12): # Another common threshold is 0.3
     
     return lmm_redshift, lmm_index
     
-def get_binned_lmms(binned_major_mergers, threshold = 5e12):
+def get_binned_lmms(binned_major_mergers, threshold = 5e11):
     
     binned_lmms = []
     binned_lmms_index = []
@@ -211,55 +241,102 @@ def get_binned_lmms(binned_major_mergers, threshold = 5e12):
 # Find Fossil Systems #
 #######################
 
-def get_lmm_calatog(major_mergers, last_mm_index, threshold = 5e12):
+def find_specials(forest, mainbranch_index, major_mergers, last_mm_redshifts, target_idx, z_thresh, violent_thresh = 20):
+    
+    # Find fossil groups
+    # Get the index of the merging halo (at the last major merger)
+    merging_mask = last_mm_redshifts > z_thresh
+    fg_merging_idx = target_idx[merging_mask]
+    # Find "rugged individualists"
+    failures_mask = last_mm_redshifts == -1
+    failed_idx = target_idx[failures_mask]
+    # Find "violent" halos
+    #violent_mask = len(major_mergers[major_mergers > 0]) > violent_thresh # experimenting in diff_MAHs-parameter_dists.ipynb
+    
+    mergers_count = np.zeros(len(major_mergers))
+    for i in range(len(major_mergers)): # Can I do this without a for loop?
+        mask = major_mergers[i] > 0
+        mergers_count[i] = len(major_mergers[i][mask])
+    violent_mask = mergers_count > violent_thresh
+    violent = np.nonzero(violent_mask)[0] # Weird that I have to do this??
+    violent_idx = mainbranch_index[:,-1][violent] # There's gotta be a better way to do this -- this is a lot of inputs to do one calculation
 
-    # get rid of all entries in mainbranch_mergers that are not at snapnum = last_mm_index (from get_lmms)?
-    mask = np.zeros_like(major_mergers)
-    #mask[:, last_mm_index] = 1 # This technically works, but not well enough
-    #print(last_mm_index >= 0)
-    #print(last_mm_index[last_mm_index >= 0])
-    mask[last_mm_index >= 0, last_mm_index[last_mm_index >= 0]] = 1
-    # Why does that work when this doesn't?
-    #mask[:, last_mm_index] = last_mm_index if last_mm_index != -1 else 0
-    
-    major_mergers[mask == 0] = 0 # ~mask ?
-    return major_mergers
+    return fg_merging_idx, failed_idx, violent_idx
 
-def get_binned_lmm_catalog(mainbranch_mergers, last_mm_index, threshold = 5e12):
+def find_violent(mainbranch_masses, mlim, major_mergers, mainbranch_index, violent_thresh = 0.1): # Can I get a percent in here?
     
-    binned_lmm_catalog = []
-    for this_bin_mainbranch, this_bin_last_mm in zip(mainbranch_mergers, last_mm_index):
-        lmm_catalog = get_lmm_calatog(this_bin_mainbranch, this_bin_last_mm, threshold = 5e12)
-        binned_lmm_catalog.append(lmm_catalog)  
-    return binned_lmm_catalog
+    # Mask major_mergers to the desired mass_bin
+    mass_mask = (mainbranch_masses[:, -1] > mlim[0]) * (mainbranch_masses[:, -1] < mlim[1])
+    my_major_mergers = major_mergers[mass_mask] # is this the smartest way to do this?
+    my_mainbranch_index = mainbranch_index[mass_mask]
+    
+    mergers_count = np.zeros(len(my_major_mergers))
+    for i in range(len(mergers_count)): # Can I do this without a for loop?
+        mm_mask = my_major_mergers[i] > 0
+        mergers_count[i] = len(my_major_mergers[i][mm_mask])
+        
+    if violent_thresh < 1.0: # if going by percentages
+        num = int(len(mergers_count)*violent_thresh + 0.5) # round up
+        top_mergers_idx = np.argsort(mergers_count)[len(mergers_count) - num - 1:]
+        top_mergers = np.sort(mergers_count)[len(mergers_count) - num - 1:]
+        print(np.min(top_mergers), np.max(top_mergers))
+        violent_idx = my_mainbranch_index[:, -1][top_mergers_idx]
+    else:
+        violent_mask = mergers_count > violent_thresh
+        violent = np.nonzero(violent_mask)[0]
+        violent_idx = my_mainbranch_index[:,-1][violent] 
+    return violent_idx, mass_mask
+    
 
-def find_root(forest, halo_idx, root_snapnum = 100):
-    
-    target_idx = []
-    for this_halo in halo_idx:
-        target_id = this_halo
-        while forest['snapnum'][target_id] != root_snapnum:
-            target_id = forest['descendant_idx'][target_id] # Why did it used to go around so many times?
-        target_idx.append(target_id)
-    return np.array(target_idx)
-    
-def find_fossils(forest, last_mm_redshifts, z_thresh):
-    merging_halos_idx = np.array((np.argwhere(last_mm_redshifts > z_thresh))[:, 0]) # This is to deal with weird formatting
-    
-    # we need to reconnect back to the main branch
-    fg_idx = find_root(forest, merging_halos_idx)
-    
-    #print(np.array(fg_idx[:, 0]))
-    # But actually! this gives you the index of the merging halo at that point (?)
-    # We need to reconnect back to the main branch!
-    return fg_idx
+def find_binned_specials(forest, binned_mainbranch_index, binned_major_mergers, binned_last_mm_redshifts, binned_target_idx, z_thresh, violent_thresh = 20):
+    binned_fg_merging_idx = []
+    binned_failed_idx = []
+    binned_violent_idx = []
+    for mainbranch_index, major_mergers, last_mm_redshifts, target_idx in zip(binned_mainbranch_index, binned_major_mergers, binned_last_mm_redshifts, binned_target_idx):
+        fg_merging_idx, failed_idx, violent_idx = find_specials(forest, mainbranch_index, major_mergers, last_mm_redshifts, target_idx, z_thresh, violent_thresh)
+        binned_fg_merging_idx.append(fg_merging_idx)
+        binned_failed_idx.append(failed_idx)
+        binned_violent_idx.append(violent_idx)
+    return binned_fg_merging_idx, binned_failed_idx, binned_violent_idx
 
-def find_binned_fossils(forest, binned_last_mm_redshifts, z_thresh):
-    binned_fg_idx = []
-    for last_mm_redshifts in binned_last_mm_redshifts:
-        fg_idx = find_fossils(forest, last_mm_redshifts, z_thresh)
-        binned_fg_idx.append(fg_idx)
-    return binned_fg_idx
+#######################
+# Count major mergers # And maybe note when they occur?
+#######################
+
+def count_major_mergers(major_mergers):
+    mergers_count = np.zeros(len(major_mergers))
+    for i in range(len(major_mergers)): # Can I do this without a for loop?
+        mask = major_mergers[i] > 0
+        mergers_count[i] = len(major_mergers[i][mask])
+    return mergers_count
+
+def count_binned_major_mergers(binned_major_mergers):
+    binned_mergers_count = [count_major_mergers(major_mergers) for major_mergers in binned_major_mergers]
+
+############
+# Get zN0s #
+############
+
+def get_z80s(forest, redshifts, halo_idx, mainbranch_masses, frac = 0.8): # Is there a way to do this binned, using only indexing?
+    final_masses = forest['tree_node_mass'][halo_idx]
+    m80s = frac*final_masses
+    snap80s = [np.argmax(mainbranch_masses[halo_n] > m80s[halo_n]) for halo_n in range(len(mainbranch_masses))]
+    z80s = np.array([redshifts[int(100 - this_snap80)] for this_snap80 in snap80s]) # Are you 100% sure this is right?
+    return z80s
+
+    # Can I do this without list comprehension?
+    #z80s_v2 = np.argmax(fg_mainbranch_masses > m80s)
+
+def get_binned_z80s(forest, redhsifts, binned_halo_idx, binned_mainbranch_masses, frac = 0.8):
+    binned_z80s = []
+    for halo_idx, mainbranch_masses in zip(binned_halo_idx, binned_mainbranch_masses, frac):
+        z80s = get_z80s(forest, redshifts, halo_idx, mainbranch_masses)
+        binned_z80s.append(z80s)
+    return binned_z80s
+
+    # or
+    #binned_z80s = [get_z80s(forest, halo_idx, mainbranch_masses) for halo_idx, mainbranch_mass in zip(binned_halo_idx, binned_mainbranch_masses)]
+    #return binned_z80s
     
 ##############################################################
 # Calculate Cumulative Number of Major Mergers:              #
@@ -332,19 +409,127 @@ def calc_mass_growth_rate_binned(masses, redshifts = redshifts):
     total_alpha_list = [calc_mass_growth_rate(this_mass_bin, redshifts) for this_mass_bin in masses]
     return total_alpha_list
 
+######################
+# Get concentrations #
+######################
+
+def split_by(forest, halo_idx, column, thresh):
+    mask = forest[column][halo_idx] > thresh
+    high = halo_idx[mask]
+    low = halo_idx[~mask]
+    return high, low
+    
+def binned_split_by(forest, binned_halo_idx, column, thresh):
+    binned_high = []
+    binned_low = []
+    for halo_idx in binned_halo_idx:
+        high, low = split_by(forest, halo_idx, column, thresh)
+        binned_high.append(high)
+        binned_low.append(low)
+    return binned_high, binned_low
+
+def plot_cdeltas(forest, binned_halo_idx, fig = None, ax = None, colors = None, labels = None, **kwargs): # Different bins, but same category
+    
+    if fig is None:
+        fig, ax = plt.subplots()
+    else:
+        fig = fig
+        ax = ax
+    if colors is None:
+        colors = iter(cm.jet(np.linspace(0,1,len(binned_halo_idx))))
+    
+    binned_cdeltas = []
+    for i, halo_idx in enumerate(binned_halo_idx): #
+        cdeltas = forest['sod_halo_cdelta'][halo_idx]
+        norm_factor = len(cdeltas)
+        hist = np.histogram(cdeltas)
+        bin_centers = (hist[1][:-1] + hist[1][1:]) / 2
+        if labels is None:
+            current_label = "bin " + str(i + 1)
+        else:
+            current_label = next(labels)
+        ax.plot(bin_centers, hist[0]/norm_factor, label = current_label, color = next(colors), **kwargs)
+        ax.legend()
+        binned_cdeltas.append(cdeltas)
+    return binned_cdeltas, fig, ax
+
+###################
+# Cosmic Web Maps #
+###################
+
+def calculate_signatures(delta, threshold = 0.2, N = 256, L = 250): # N = mesh size, L = box size
+    kx = fft.fftfreq(N) * N/L * 2*math.pi
+    ky = fft.fftfreq(N) * N/L * 2*math.pi
+    kz = fft.rfftfreq(N) * N/L * 2*math.pi 
+
+    #kgrid = np.meshgrid(kx, ky, kz, indexing='ij')
+    #kgrid: first 3 are x, y, and z axis, then the next dimensions are the grids for x y and z
+    kxgrid, kygrid, kzgrid = np.meshgrid(kx, ky, kz, indexing='ij')
+    k_squared = kxgrid**2 + kygrid**2 + kzgrid**2
+    k_squared[0,0,0] = 1
+
+    delta_f = fft.rfftn(delta)
+    phi = fft.irfftn(delta_f/-k_squared)
+    
+    Fx = fft.irfftn(1j * kxgrid * delta_f/ k_squared) # is this the same as fft.irfftn(1j * kxgrid * fft.rfftn(phi)) ?
+    Fy = fft.irfftn(1j * kygrid * delta_f/ k_squared)
+    Fz = fft.irfftn(1j * kzgrid * delta_f/ k_squared)
+    
+    Txx = fft.irfftn(-kxgrid * kxgrid * delta_f/ k_squared)
+    Txy = fft.irfftn(-kxgrid * kygrid * delta_f/ k_squared)
+    Txz = fft.irfftn(-kxgrid * kzgrid * delta_f/ k_squared)
+    Tyy = fft.irfftn(-kygrid * kygrid * delta_f/ k_squared)
+    Tyz = fft.irfftn(-kygrid * kzgrid * delta_f/ k_squared)
+    Tzz = fft.irfftn(-kzgrid * kzgrid * delta_f/ k_squared)
+    
+    T = np.zeros((256, 256, 256, 3, 3))
+    T[..., 0, 0] = Txx
+    T[..., 0, 1] = Txy
+    T[..., 0, 2] = Txz
+    T[..., 1, 0] = Txy
+    T[..., 1, 1] = Tyy
+    T[..., 1, 2] = Tyz
+    T[..., 2, 0] = Txz
+    T[..., 2, 1] = Tyz
+    T[..., 2, 2] = Tzz
+    eigs = np.linalg.eigvalsh(T)
+    # Find how many are positive, negative (translates to voids, nodes, etc.)
+    mask = eigs > threshold
+    signatures = np.sum(mask, axis=-1)
+    isignatures = 3 - signatures # for plotting purposes
+    
+    return isignatures
+
+def smooth_f(f, sigma, N = 256, L = 250):
+    ng = N # number of grid cells
+    L = L # actual sidelength of subvolume, in Mpc/h
+    xax = np.linspace(0, L, ng, endpoint = False) # Last entry will be ~249, at position i = 255
+    dxax = L/ng # size of each interval (like a dx)
+    x, y, z = np.meshgrid(xax, xax, xax, indexing='ij')
+    # x, y, and z are like "d" above
+    x[x > L/2] -= L
+    y[y > L/2] -= L
+    z[z > L/2] -= L
+    g = 1/ ((2 * np.pi * sigma**2)**(3/2)) * np.exp(-( (x**2 + y**2 + z**2) / ( 2.0 * sigma**2 ) ) )
+    fsmooth = fft.irfftn(fft.rfftn(f) * fft.rfftn(g*(dxax**3)))
+    return fsmooth
+
 ########################################################
 # Plot evolution:                                      #        
 # Display M(z) for halos that we tracked in track_evol #
 ########################################################
     
-def plot_evol(masses, mm_times = [], thresholds = [], filename = "new_plot", bins = [], redshifts = redshifts, avg = False, normalized = False, extremum = '', quant = 0, mass_range = [], x_axis = "z_nums", fig = None, ax = None, auto_legend = True, cust_legend = [], extra_legend = [], cust_color = None, **kwargs):
+def plot_evol(masses, mm_times = [], thresholds = [], filename = "new_plot", bins = [], redshifts = redshifts, avg = False, normalized = False, extremum = '', quant = 0, mass_range = [], x_axis = "z_nums", fig = None, ax = None, auto_legend = True, cust_legend = [], extra_legend = [], cust_color = None, cust_color_iter = None, **kwargs):
     
     if ax is None:
         fig, ax = plt.subplots()
     else:
         fig = fig
         ax = ax
-    color = iter(cm.jet(np.linspace(0,1,len(masses)))) # Bin colors
+    if cust_color_iter == None:
+        color = iter(cm.jet(np.linspace(0,1,len(masses)))) # Bin colors
+    else:
+        color = cust_color_iter
     bin_legend_handles = []
     
     # Change zeros to nans so they don't get plotted
@@ -353,16 +538,16 @@ def plot_evol(masses, mm_times = [], thresholds = [], filename = "new_plot", bin
     
     # Establish timesteps
     if x_axis == 'z_nums':
-        timesteps = redshifts
+        timesteps = np.flip(redshifts)
     elif x_axis == 'snap_nums':
         timesteps = np.linspace(0, 100, 101)
     
     # Plot
     for n, this_bin in enumerate(masses): # loop over all bins
-        if cust_color is None:
-            current_color = next(color)
-        else:
+        if cust_color is not None:
             current_color = cust_color
+        else:
+            current_color = next(color)
         
         ax.plot(timesteps, this_bin, color = current_color, **kwargs)
 
@@ -790,6 +975,74 @@ def pdf_lms(mm_times_raw, thresholds, bins, bin_labels = [], cust_legend = [], m
     for axis in [ax.xaxis, ax.yaxis]:
         axis.set_major_formatter(ScalarFormatter())
 
+    return fig, ax
+
+####################################
+# Plot averages of FGs vs. non-FGs #
+####################################
+
+def plot_compare_avgs(forest, fg_idx, nonfg_idx, mbins, nsamples = 5, xaxis = "z_nums", xend = 6, ylims = [3*10**10, 4*10**13], fig = None, ax = None):
+
+    color = iter(["turquoise", "plum"]) #iter(["lightpink", "powderblue", "salmon", "turquoise"])
+    handles = []
+
+    # First, plot some samples
+    for halo_idx in [fg_idx, nonfg_idx]: # For each bin
+        current_color = next(color)
+        sampled_idx = np.random.choice(halo_idx, nsamples, replace=False)
+        mainbranch_index, mainbranch_masses = get_branches(sampled_idx, forest)
+        fig, ax = plot_evol(mainbranch_masses, x_axis = xaxis, fig = fig, ax = ax, cust_color = current_color)
+
+    # Now try the non-FGs
+    color_for_avgs = iter(["darkblue", "darkviolet"])
+    avg_tf = True
+    label_for_avgs = iter(["average: fossil group candidates", "average: all halos"])
+    #print(len(custom_legend))
+    for halo_idx in [fg_idx, nonfg_idx]:
+        current_color = next(color_for_avgs)
+        current_label = next(label_for_avgs)
+        mainbranch_binned_index, mainbranch_binned_masses = get_binned_branches([halo_idx], forest) # Maybe make this binnable?
+        mainbranch_avg_masses = avg_mass_bins(mainbranch_binned_masses)
+        fig, ax = plot_evol(mainbranch_avg_masses, bins = mbins, x_axis = xaxis, fig = fig, ax = ax, cust_color = current_color, cust_legend = current_label)
+        fake_line, = ax.plot([],[], color=current_color, label=current_label)
+        handles.append(fake_line)
+
+    # Zoom in, make it pretty
+    ax.set_xlim(xend, 0)
+    ax.set_xscale('symlog', linthresh = 1, linscale = 0.4)
+    ax.set_ylim(ylims[0], ylims[1])
+    ax.xaxis.set_ticks(np.arange(0, xend, 1))
+    ax.xaxis.set_major_formatter(ScalarFormatter())
+    ax.legend(handles = handles, loc = "lower right")
+    return fig, ax
+
+def plot_compare_avgs_V2(forest, fg_idx, nonfg_idx, mbins, nsamples = 5, xaxis = "z_nums", xend = 6, ylims = [3e10, 5e13], normalized = False, fig = None, ax = None): # Assume fg_idx and nonfg_idx should have same mbins
+
+    linestyle_handles = []
+    avg_tf = True
+    linestyles = iter(['--', '-'])
+    category_labels = iter(["fossils", "all halos (fgs & non-fgs)"])
+    
+    for i, halo_idx in enumerate([fg_idx, nonfg_idx]): # each category (fg and nonfg)
+        current_linestyle = next(linestyles)
+        current_label = next(category_labels)
+        mainbranch_binned_index, mainbranch_binned_masses = get_binned_branches(halo_idx, forest)
+        if normalized is True:
+            for bin_n, this_bin_masses in enumerate(mainbranch_binned_masses):
+                mainbranch_binned_masses[bin_n] = this_bin_masses / this_bin_masses[:, [-1]]
+        mainbranch_avg_masses = avg_mass_bins(mainbranch_binned_masses)
+        fig, ax = plot_evol(mainbranch_avg_masses, bins = mbins, x_axis = xaxis, fig = fig, ax = ax, linestyle = current_linestyle)
+        fake_line, = ax.plot([],[], linestyle=current_linestyle, color = 'black', label=current_label)
+        linestyle_handles.append(fake_line)
+
+    # Zoom in, make it pretty
+    ax.set_xlim(xend, 0)
+    ax.set_xscale('symlog', linthresh = 1, linscale = 0.4)
+    ax.set_ylim(ylims[0], ylims[1])
+    ax.xaxis.set_ticks(np.arange(0, xend, 1))
+    ax.xaxis.set_major_formatter(ScalarFormatter())
+    ax.legend(handles = linestyle_handles, loc = "lower right")
+    
     return fig, ax
     
 ####################
@@ -1225,3 +1478,46 @@ def OLD_get_aggregate_mergers(forest, progenitor_array, mainbranch_mergers, main
     elif major_mergers_only == False:
         mergers_index = main_merger_index[merger_mask]
         return mergers, mergers_index
+    
+# Why these didn't work
+# merging_halos_idx was actually returning row numbers of mainbranch_idx (and the 'like' matrices)
+# you were then using those row numbers as if they were "indices" and evolving them to the end of their branch
+# surprise! Those were not the right halos
+# instead, you just need to compare last_mm_redshifts to target_idx (they have the same shape)
+# and target_idx will give you the halo_index's that you need
+
+def OLD_find_root(forest, halo_idx, root_snapnum = 100):
+    target_idx = []
+    for this_halo in halo_idx:
+        target_id = this_halo
+        while forest['snapnum'][target_id] != root_snapnum:
+            target_id = forest['descendant_idx'][target_id] # Why did it used to go around so many times?
+        target_idx.append(target_id)
+    return np.array(target_idx)
+
+def OLD_find_fossils(forest, last_mm_redshifts, z_thresh):
+    # Get the index of the merging halo (at the last major merger)
+    merging_halos_idx = np.array((np.argwhere(last_mm_redshifts > z_thresh))[:, 0]) # End index is to deal with weird formatting
+    # Find the halo at the root of this branch
+    fg_idx = find_root(forest, merging_halos_idx)
+    return fg_idx
+
+# Fine, but useless (because you can just use last_mm_redshifts or the like)
+def get_lmm_calatog(major_mergers, last_mm_index, threshold = 5e11):
+
+    # get rid of all entries in mainbranch_mergers that are not at snapnum = last_mm_index (from get_lmms)?
+    mask = np.zeros_like(major_mergers)
+    mask[last_mm_index >= 0, last_mm_index[last_mm_index >= 0]] = 1
+    # Why does that work when this doesn't?
+    #mask[:, last_mm_index] = last_mm_index if last_mm_index != -1 else 0
+    
+    major_mergers[mask == 0] = 0 # ~mask ?
+    return major_mergers
+
+def get_binned_lmm_catalog(mainbranch_mergers, last_mm_index, threshold = 5e11):
+    
+    binned_lmm_catalog = []
+    for this_bin_mainbranch, this_bin_last_mm in zip(mainbranch_mergers, last_mm_index):
+        lmm_catalog = get_lmm_calatog(this_bin_mainbranch, this_bin_last_mm, threshold = 5e11)
+        binned_lmm_catalog.append(lmm_catalog)  
+    return binned_lmm_catalog
