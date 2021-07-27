@@ -9,10 +9,14 @@
 
 # A few imports
 import haccytrees.mergertrees
-import haccytools.mergertrees.visualization
+#import haccytools.mergertrees.visualization
+import numba
 import pickle
+import math
+import copy
 import numpy as np
 import pandas as pd
+import numpy.fft as fft
 import astropy.units as u
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
@@ -22,19 +26,50 @@ from astropy.cosmology import FlatLambdaCDM
 from itertools import groupby
 from matplotlib.ticker import ScalarFormatter
 
+# these came from attempting to write power spectra
+try:
+    import pyfftw
+except ImportError:
+    print("pyfftw not available, using numpy fft")
+    _fft = np.fft
+    _has_pyfftw = False
+    _fft_kwargs = {}
+else:
+    _fft = pyfftw.interfaces.numpy_fft
+    _fft_kwargs = {'threads': 40}
+
+
 # A few globals:
-redshifts = np.flip(np.array([10.044, 9.8065, 9.5789, 9.3608, 9.1515, 8.7573, 8.5714, 8.3925, 8.0541, 7.8938, 7.7391, 7.4454, 7.3058, 7.04, 6.9134, 6.6718, 6.5564, 6.3358, 6.1277, 6.028, 5.8367, 5.6556, 5.4839, 5.3208, 5.2422, 5.0909, 4.9467, 4.7429, 4.6145, 4.4918, 4.3743, 4.2618, 4.1015, 4.00, 3.8551, 3.763, 3.6313, 3.5475, 3.4273, 3.3133, 3.205, 3.102, 3.0361, 2.9412, 2.8506, 2.7361, 2.6545, 2.5765, 2.4775, 2.4068, 2.3168, 2.2524, 2.1703, 2.0923, 2.018, 1.9472, 1.8797, 1.7994, 1.7384, 1.68, 1.6104, 1.5443, 1.4938, 1.4334, 1.3759, 1.321, 1.2584, 1.2088, 1.152, 1.1069, 1.0552, 1.006, 0.9591, 0.9143, 0.8646, 0.824, 0.7788, 0.7358, 0.6948, 0.6557, 0.6184, 0.5777, 0.5391, 0.5022, 0.4714, 0.4337, 0.4017, 0.3636, 0.3347, 0.3035, 0.2705, 0.2423, 0.2123, 0.1837, 0.1538, 0.1279, 0.1008, 0.0749, 0.0502, 0.0245, 0.00]))
+redshifts = np.array([10.044, 9.8065, 9.5789, 9.3608, 9.1515, 8.7573, 8.5714, 8.3925, 8.0541, 7.8938, 7.7391, 7.4454, 7.3058, 7.04, 6.9134, 6.6718, 6.5564, 6.3358, 6.1277, 6.028, 5.8367, 5.6556, 5.4839, 5.3208, 5.2422, 5.0909, 4.9467, 4.7429, 4.6145, 4.4918, 4.3743, 4.2618, 4.1015, 4.00, 3.8551, 3.763, 3.6313, 3.5475, 3.4273, 3.3133, 3.205, 3.102, 3.0361, 2.9412, 2.8506, 2.7361, 2.6545, 2.5765, 2.4775, 2.4068, 2.3168, 2.2524, 2.1703, 2.0923, 2.018, 1.9472, 1.8797, 1.7994, 1.7384, 1.68, 1.6104, 1.5443, 1.4938, 1.4334, 1.3759, 1.321, 1.2584, 1.2088, 1.152, 1.1069, 1.0552, 1.006, 0.9591, 0.9143, 0.8646, 0.824, 0.7788, 0.7358, 0.6948, 0.6557, 0.6184, 0.5777, 0.5391, 0.5022, 0.4714, 0.4337, 0.4017, 0.3636, 0.3347, 0.3035, 0.2705, 0.2423, 0.2123, 0.1837, 0.1538, 0.1279, 0.1008, 0.0749, 0.0502, 0.0245, 0.00])
+
+##############
+# Make Masks #
+##############
+
+def make_masks(my_forest, bins = [[1e13, 10**13.05], [10**13.3, 10**13.35], [10**13.6, 10**13.65]], pre_masked_z0 = False):
+    masks = []
+    for this_bin in bins:
+        if pre_masked_z0: # If your forest is already constrained to snapnum 100
+            mask = (my_forest['tree_node_mass'] > this_bin[0]) & (my_forest['tree_node_mass'] < this_bin[1])
+            masks.append(mask)
+        else:
+            mask_z0 = my_forest['snapnum'] == 100
+            thin_mask = (my_forest['tree_node_mass'] > this_bin[0]) & (my_forest['tree_node_mass'] < this_bin[1])
+            mask = np.logical_and(mask_z0, thin_mask)
+            masks.append(mask)
+    return masks
 
 ###############################################################################
 # Find Halos:                                                                 #
 # return an index of halo id's whose mass values fall into the given range    #
 ###############################################################################
 
-def find_halos(forest, mlim, sn = 100):
+def find_halos(forest, mlims, sn = 100, target_mask = None): # I think target_mask can be the result of make_masks?
         
-    z0_mask = forest['snapnum'] == sn
-    target_mask = z0_mask & (forest['tree_node_mass'] > mlim[0]) * (forest['tree_node_mass'] < mlim[1])
-    target_idx = (forest['halo_index'][target_mask])
+    if target_mask is None:
+        z0_mask = forest['snapnum'] == sn
+        target_mask = z0_mask & (forest['tree_node_mass'] > mlims[0]) * (forest['tree_node_mass'] < mlims[1])
+    target_idx = (forest['halo_index'][target_mask]) # Why these parentheses?
     return target_idx
    
 #############################################################################
@@ -48,7 +83,7 @@ def bin_halos(forest, mbins, sn = 100):
     for i in range(len(mbins) - 1):
         z0_mask = forest['snapnum'] == sn
         mlim = [mbins[i], mbins[i+1]]
-        target_mask = z0_mask & (forest['tree_node_mass'] > mlim[0]) * (forest['tree_node_mass'] < mlim[1])
+        target_mask = z0_mask & (forest['tree_node_mass'] > mlim[0]) * (forest['tree_node_mass'] < mlim[1]) # would this work with & instead?
         target_idx.append(forest['halo_index'][target_mask])
 
     return target_idx
@@ -58,8 +93,10 @@ def bin_halos(forest, mbins, sn = 100):
 # New (and easier!) version of track_evol #
 ###########################################
 
-def get_branches(target_idx, forest):
+def get_branches(target_idx, forest, normalized = False):
 
+    #print("target idx is:\n", target_idx)
+    #print("forest keys:\n", forest.keys())
     # this will create a matrix of shape (ntargets, nsteps), where each column
     # is the main progenitor branch of a target. It contains the indices to the
     # forest data, and is -1 if the halo does not exist at that time
@@ -70,16 +107,20 @@ def get_branches(target_idx, forest):
     active_mask = mainbranch_index != -1
     mainbranch_mass = np.zeros_like(mainbranch_index, dtype=np.float32)
     mainbranch_mass[active_mask] = forest['tree_node_mass'][mainbranch_index[active_mask]]
+    
+    if normalized == True:
+        #mainbranch_mass = mainbranch_mass / forest['tree_node_mass'][:, -1] # Doesn't need .values because there's just one
+        mainbranch_mass = mainbranch_mass / mainbranch_mass[:, [-1]] # why this extra []?
 
     return mainbranch_index, mainbranch_mass
 
-def get_binned_branches(target_idx, forest, snap = 100):
+def get_binned_branches(binned_target_idx, forest, normalized = False, snap = 100):
 
     mainbranch_binned_index = []
     mainbranch_binned_masses = []
-
-    for i in range(len(target_idx)):
-        this_target_idx = target_idx[i]
+    
+    for i in range(len(binned_target_idx)):
+        this_target_idx = binned_target_idx[i]
 
         # this will create a matrix of shape (ntargets, nsteps), where each column
         # is the main progenitor branch of a target. It contains the indices to the
@@ -87,10 +128,13 @@ def get_binned_branches(target_idx, forest, snap = 100):
         mainbranch_index = haccytrees.mergertrees.get_mainbranch_indices(
             forest, simulation='LastJourney', target_index=this_target_idx
         )
-
+        
         active_mask = mainbranch_index != -1
         mainbranch_mass = np.zeros_like(mainbranch_index, dtype=np.float32)
-        mainbranch_mass[active_mask] = forest['fof_halo_mass'][mainbranch_index[active_mask]]
+        mainbranch_mass[active_mask] = forest['tree_node_mass'][mainbranch_index[active_mask]]
+        
+        if normalized == True:
+            mainbranch_mass = mainbranch_mass / mainbranch_mass[:, [-1]]
 
         mainbranch_binned_index.append(mainbranch_index)
         mainbranch_binned_masses.append(mainbranch_mass)
@@ -102,23 +146,27 @@ def get_binned_branches(target_idx, forest, snap = 100):
 # track the evolution of halos in bins, return the average masses of each bin #
 ###############################################################################
 
-def avg_mass_bins(masses, bins):
+def avg_mass_bins(masses):
     
-    # Take the average over all the masses in each bin
-    final_masses = final_timesteps = []
-    for i in range(len(bins) - 1): # Should be same as len(masses)
-        avg_masses = np.average(masses[i], axis = 0) # do I still need to specify axis = 0?
-        final_masses.append(avg_masses)
+    # In each bin, take the average over all the masses
+    final_masses = []
+    variances = []
+    stddevs = []
+    for this_bin_masses in masses: # Should be same as len(masses)
+        avg = np.average(this_bin_masses, axis = 0)
+        final_masses.append(avg) # do I still need to specify axis = 0? Why or why not?
+        variances.append(np.var(this_bin_masses, axis = 0))
+        stddevs.append(np.std(this_bin_masses, axis = 0))
         
-    return final_masses
+    return final_masses#, variances, stddevs
 
 ############################################################
 # Get mainbranch mergers: (second way)                     #
-# Return an index, nhalos x nsteps, with merger info where # 
+# Return an index, nhalos x nsteps, with merger info where #
 # mergers occur, 0 otherwise                               #
 ############################################################
 
-def get_mainbranch_mergers(forest, progenitor_array, mainbranch_index, absolute_threshold = False):
+def get_mainbranch_mergers(forest, progenitor_array, mainbranch_index, absolute_threshold = True):
 
     # mask out indices of the mainbranch where there are no halos
     active_mask = mainbranch_index != -1
@@ -131,21 +179,24 @@ def get_mainbranch_mergers(forest, progenitor_array, mainbranch_index, absolute_
     # the index will be negative if there's no merger, mask those out
     merger_mask = main_merger_index >= 0
     
-    # allocate an array containing merging info for each halo at each snapshot of its life
-    mainbranch_merger = np.zeros_like(mainbranch_index, dtype=np.float32)
+    # allocate a merger_ratio matrix, or array containing merger masses, 0 by default
+    merger_mass_or_ratio = np.zeros_like(mainbranch_index, dtype=np.float32)
 
     if absolute_threshold == True:
-        mainbranch_merger[active_mask] = forest['tree_node_mass'][main_merger_index] # merger_mask
-    elif absolute_threshold == False:
-        # get indices to main progenitor (this is what the secondary progenitor merged into)
-        main_progenitor_index = haccytrees.mergertrees.get_nth_progenitor_indices(
-            forest, progenitor_array, target_index=mainbranch_index[active_mask], n=1
-        )
-        mainbranch_merger[tuple(np.argwhere(active_mask)[merger_mask].T)] = forest['tree_node_mass'][main_merger_index[merger_mask]] / forest['tree_node_mass'][main_progenitor_index[merger_mask]]
+        # fill the elements for which a merger occurred with the mass of the main merger
+        merger_mass_or_ratio[tuple(np.argwhere(active_mask)[merger_mask].T)] = \
+            forest['tree_node_mass'][main_merger_index[merger_mask]]
         
-    return mainbranch_merger
+    elif absolute_threshold == False: # does this one actually work?
+        # fill the elements for which a merger occurred with the mass ratio
+        merger_mass_or_ratio[tuple(np.argwhere(active_mask)[merger_mask].T)] = \
+            forest['tree_node_mass'][main_merger_index[merger_mask]] / forest['tree_node_mass'][main_merger_index[merger_mask]] # This was
+            # Not sure what main_progenitor_index was about
+            #forest['tree_node_mass'][main_merger_index[merger_mask]] / forest['tree_node_mass'][main_progenitor_index[merger_mask]]
+        
+    return merger_mass_or_ratio
 
-def get_binned_mainbranch_mergers(forest, progenitor_array, binned_mainbranch_index, absolute_threshold = False):
+def get_binned_mainbranch_mergers(forest, progenitor_array, binned_mainbranch_index, absolute_threshold = True):
     
     binned_mainbranch_mergers = []
     
@@ -159,13 +210,14 @@ def get_binned_mainbranch_mergers(forest, progenitor_array, binned_mainbranch_in
 # Get major mergers #
 #####################
 
-def get_major_mergers(mainbranch_mergers, threshold = 5e12): # Another common threshold is 0.3
+def get_major_mergers(mainbranch_mergers, threshold = 5e11): # Another common threshold is 0.3
     
-    mm_mask = mainbranch_mergers > threshold # Major mergers mask
-    mainbranch_mergers[~mm_mask] = 0 # Set all non-major mergers to zero
-    return mainbranch_mergers # These are now major mergers!
+    major_mergers = copy.deepcopy(mainbranch_mergers)
+    mm_mask = major_mergers > threshold # Major mergers mask
+    major_mergers[~mm_mask] = 0 # Set all non-major mergers to zero
+    return major_mergers
 
-def get_binned_major_mergers(binned_mainbranch_mergers, threshold = 5e12):
+def get_binned_major_mergers(binned_mainbranch_mergers, threshold = 5e11):
     
     binned_mms = []
     for this_bin in binned_mainbranch_mergers:
@@ -178,88 +230,162 @@ def get_binned_major_mergers(binned_mainbranch_mergers, threshold = 5e12):
 # Get Last Major (Luminous) Mergers #
 #####################################
 
-def get_lmms(major_mergers, threshold = 5e12): # Another common threshold is 0.3
+def get_lmms(major_mergers, threshold = 5e11): # Another common threshold is 0.3
 
-    mm_mask = major_mergers > threshold
+    #print(major_mergers[0:4])
+    mm_mask = major_mergers > threshold # recreate the mm_mask from get_major_mergers # Should this be mainbranch mergers? Might  be simpler + shorten the pipeline
+    #print(mm_mask[0:4])
+    #print(~np.any(mm_mask, axis=1)[0:4])
+    
     # Find last snapnum of the simulation
     simulation = haccytrees.Simulation.simulations['LastJourney']
     scale_factors = simulation.step2a(np.array(simulation.cosmotools_steps))
     last_snap = len(simulation.cosmotools_steps) - 1
     
     # Find snapnum of the LAST major merger for each halo
-    lmm_index = last_snap - np.argmax((major_mergers > threshold)[:, ::-1], axis=1) # Why can't we just use mm_mask here? (instead of (major_mergers > threshold))
+    #print(np.argmax(mm_mask[:, ::-1], axis=1)[0:4])
+    lmm_index = last_snap - np.argmax(mm_mask[:, ::-1], axis=1) # since mm_mask is boolean, np.argmax returns the index of the first True
+    #print(lmm_index[0:4])
+                                                                # we reverse order of mm_mask so that we find the last True
     lmm_redshift = 1/scale_factors[lmm_index] - 1
-
+    
     # mark all halos without any major merger with a last_mm_redshift of -1
     lmm_index[~np.any(mm_mask, axis = 1)] = -1
+    #print(lmm_index[0:4])
     lmm_redshift[~np.any(mm_mask, axis=1)] = -1 # Will this do anything? I thought last_mm_redshift was already masked to make sure it always included mergers
     
-    return lmm_redshift, lmm_index
+    return lmm_redshift#, lmm_index
     
-def get_binned_lmms(binned_major_mergers, threshold = 5e12):
+def get_binned_lmms(binned_major_mergers, threshold = 5e11):
     
     binned_lmms = []
     binned_lmms_index = []
     for this_bin in binned_major_mergers:
-        lmms, lmms_index = get_lmms(this_bin, threshold)
+        lmms = get_lmms(this_bin, threshold)
         binned_lmms.append(lmms)
-        binned_lmms_index.append(lmms_index)
+        #binned_lmms_index.append(lmms_index)
         
-    return binned_lmms, binned_lmms_index
+    return binned_lmms#, binned_lmms_index
 
 #######################
 # Find Fossil Systems #
 #######################
 
-def get_lmm_calatog(major_mergers, last_mm_index, threshold = 5e12):
+def find_specials(forest, mainbranch_index, major_mergers, lmm_redshifts, target_idx, z_thresh = 1, mrich_thresh = 20, restrict_mass = False, use_sigma = False, mainbranch_masses = None):
+    
+    # Find fossil groups
+    merging_mask = lmm_redshifts > z_thresh
+    fg_merging_idx = target_idx[merging_mask]
+    
+    # Find "rugged individualists"
+    rugs_mask = lmm_redshifts == -1
+    rugs_idx = target_idx[rugs_mask]
+    
+    # Find "merger rich" halos
+    if not restrict_mass:
+        #print("finding merger rich halos, not restricting mass")
+        mergers_count = np.zeros(len(major_mergers))
+        for i in range(len(major_mergers)): # Can I do this without a for loop?
+            mask = major_mergers[i] > 0
+            mergers_count[i] = len(major_mergers[i][mask])
+        mrich_mask = mergers_count > mrich_thresh
+        mrich = np.nonzero(mrich_mask)[0] # Weird that I have to do this?? Creates an arg-mask for where the true values are?
+        mrich_idx = mainbranch_index[:,-1][mrich] # There's gotta be a better way to do this -- this is a lot of inputs to do one calculation
+        
+    else: # if want to restrict mass
+        if use_sigma: # within one stddev of average mass
+            #print("finding merger rich halos, restricting mass with sigma")
+            #print(mainbranch_masses[:, -1].shape)
+            mu = np.mean(mainbranch_masses[:, -1][merging_mask]) # final mass, only for fossil groups? that seems wrong...
+            sigma = np.std(mainbranch_masses[:, -1][merging_mask])
+            mlims = np.array([mu - sigma, mu + sigma])
 
-    # get rid of all entries in mainbranch_mergers that are not at snapnum = last_mm_index (from get_lmms)?
-    mask = np.zeros_like(major_mergers)
-    #mask[:, last_mm_index] = 1 # This technically works, but not well enough
-    #print(last_mm_index >= 0)
-    #print(last_mm_index[last_mm_index >= 0])
-    mask[last_mm_index >= 0, last_mm_index[last_mm_index >= 0]] = 1
-    # Why does that work when this doesn't?
-    #mask[:, last_mm_index] = last_mm_index if last_mm_index != -1 else 0
+        # find the mass range of fgs and failed groups
+        else: # within min and max masses
+            #print("restricting mass, no sigma")
+            failures_mask = lmm_redshifts == -1
+            min_min = np.min((np.min(mainbranch_masses[:, -1][merging_mask]), np.min(mainbranch_masses[:, -1][failures_mask])))
+            max_max = np.max((np.max(mainbranch_masses[:, -1][merging_mask]), np.max(mainbranch_masses[:, -1][failures_mask])))
+            mlims = np.array([min_min, max_max])
     
-    major_mergers[mask == 0] = 0 # ~mask ?
-    return major_mergers
+        # Use those mlims to go find mrich groups
+        mrich_idx = find_mrich_in_range(mainbranch_masses, mlims, major_mergers, mainbranch_index, mrich_thresh)
 
-def get_binned_lmm_catalog(mainbranch_mergers, last_mm_index, threshold = 5e12):
-    
-    binned_lmm_catalog = []
-    for this_bin_mainbranch, this_bin_last_mm in zip(mainbranch_mergers, last_mm_index):
-        lmm_catalog = get_lmm_calatog(this_bin_mainbranch, this_bin_last_mm, threshold = 5e12)
-        binned_lmm_catalog.append(lmm_catalog)  
-    return binned_lmm_catalog
+    return fg_merging_idx, rugs_idx, mrich_idx
 
-def find_root(forest, halo_idx, root_snapnum = 100):
-    
-    target_idx = []
-    for this_halo in halo_idx:
-        target_id = this_halo
-        while forest['snapnum'][target_id] != root_snapnum:
-            target_id = forest['descendant_idx'][target_id] # Why did it used to go around so many times?
-        target_idx.append(target_id)
-    return np.array(target_idx)
-    
-def find_fossils(forest, last_mm_redshifts, z_thresh):
-    merging_halos_idx = np.array((np.argwhere(last_mm_redshifts > z_thresh))[:, 0]) # This is to deal with weird formatting
-    
-    # we need to reconnect back to the main branch
-    fg_idx = find_root(forest, merging_halos_idx)
-    
-    #print(np.array(fg_idx[:, 0]))
-    # But actually! this gives you the index of the merging halo at that point (?)
-    # We need to reconnect back to the main branch!
-    return fg_idx
 
-def find_binned_fossils(forest, binned_last_mm_redshifts, z_thresh):
-    binned_fg_idx = []
-    for last_mm_redshifts in binned_last_mm_redshifts:
-        fg_idx = find_fossils(forest, last_mm_redshifts, z_thresh)
-        binned_fg_idx.append(fg_idx)
-    return binned_fg_idx
+def find_mrich_in_range(mainbranch_masses, mlim, major_mergers, mainbranch_index, mrich_thresh = 0.1):
+    
+    # Mask major_mergers to the desired mass bin
+    mlim_mask = (mainbranch_masses[:, -1] > mlim[0]) * (mainbranch_masses[:, -1] < mlim[1])
+    masked_major_mergers = major_mergers[mlim_mask] # is this the smartest way to do this?
+    masked_mainbranch_index = mainbranch_index[mlim_mask]
+    
+    n_mergers = np.zeros(len(masked_major_mergers)) # will hold the number of major mergers for each halo in index
+    for i in range(len(n_mergers)):
+        mm_mask = masked_major_mergers[i] > 0 # count nonzeros (each nonzero is a major merger)
+        n_mergers[i] = len(masked_major_mergers[i][mm_mask])
+        
+    if mrich_thresh < 1.0: # if going by percentages
+        num = int(len(n_mergers)*mrich_thresh + 0.5) # how many halos make up the top 'violent_thresh' percent of this sample?
+        sorted_n_mergers = np.sort(n_mergers)[len(n_mergers) - num - 1:]
+        sorted_n_mergers_idx = np.argsort(n_mergers)[len(n_mergers) - num - 1:] # idx of top 'num' halos (sorted by most mergers)
+        mrich_idx = masked_mainbranch_index[:, -1][sorted_n_mergers_idx]
+    else: # if going by absolute count
+        mrich_mask = n_mergers > mrich_thresh
+        mrich = np.nonzero(mrich_mask)[0]
+        mrich_idx = masked_mainbranch_index[:,-1][mrich]
+    return mrich_idx
+    
+def find_binned_specials(forest, binned_mainbranch_index, binned_major_mergers, binned_last_mm_redshifts, binned_target_idx, z_thresh = 1, mrich_thresh = 20, restrict_mass = False, use_sigma = False, mainbranch_masses = None):
+    binned_fg_merging_idx = []
+    binned_failed_idx = []
+    binned_violent_idx = []
+    for mainbranch_index, major_mergers, last_mm_redshifts, target_idx in zip(binned_mainbranch_index, binned_major_mergers, binned_last_mm_redshifts, binned_target_idx):
+        fg_merging_idx, failed_idx, violent_idx = find_specials(forest, mainbranch_index, major_mergers, last_mm_redshifts, target_idx, z_thresh, mrich_thresh, restrict_mass, use_sigma, mainbranch_masses)
+        binned_fg_merging_idx.append(fg_merging_idx)
+        binned_failed_idx.append(failed_idx)
+        binned_violent_idx.append(violent_idx)
+    return binned_fg_merging_idx, binned_failed_idx, binned_violent_idx
+
+#######################
+# Count major mergers # And maybe note when they occur?
+#######################
+
+def count_major_mergers(major_mergers):
+    mergers_count = np.zeros(len(major_mergers))
+    for i in range(len(major_mergers)): # Can I do this without a for loop?
+        mask = major_mergers[i] > 0
+        mergers_count[i] = len(major_mergers[i][mask])
+    return mergers_count
+
+def count_binned_major_mergers(binned_major_mergers):
+    binned_mergers_count = [count_major_mergers(major_mergers) for major_mergers in binned_major_mergers]
+
+############
+# Get zN0s #
+############
+
+def get_zfracs(forest, redshifts, halo_idx, mainbranch_masses, frac = 0.8):
+    final_masses = forest['tree_node_mass'][halo_idx]
+    m_fracs = frac*final_masses
+    snap_fracs = [np.argmax(mainbranch_masses[halo_n] > m_fracs[halo_n]) for halo_n in range(len(mainbranch_masses))]
+    z_fracs = np.array([np.flip(redshifts)[int(100 - this_snap)] for this_snap in snap_fracs]) # Are you 100% sure this is right?
+    return z_fracs
+
+    # Can I do this without list comprehension?
+    #z80s_v2 = np.argmax(fg_mainbranch_masses > m80s)
+
+def get_binned_zfracs(forest, redhsifts, binned_halo_idx, binned_mainbranch_masses, frac = 0.8):
+    binned_zfracs = []
+    for halo_idx, mainbranch_masses in zip(binned_halo_idx, binned_mainbranch_masses, frac):
+        zfracs = get_zfracs(forest, redshifts, halo_idx, mainbranch_masses)
+        binned_zfracs.append(z80s)
+    return binned_zfracs
+
+    # or
+    #binned_z80s = [get_z80s(forest, halo_idx, mainbranch_masses) for halo_idx, mainbranch_mass in zip(binned_halo_idx, binned_mainbranch_masses)]
+    #return binned_z80s
     
 ##############################################################
 # Calculate Cumulative Number of Major Mergers:              #
@@ -332,42 +458,548 @@ def calc_mass_growth_rate_binned(masses, redshifts = redshifts):
     total_alpha_list = [calc_mass_growth_rate(this_mass_bin, redshifts) for this_mass_bin in masses]
     return total_alpha_list
 
+######################
+# Get concentrations #
+######################
+
+def split_by(forest, halo_idx, column, thresh):
+    mask = forest[column][halo_idx] > thresh
+    high = halo_idx[mask]
+    low = halo_idx[~mask]
+    return high, low
+    
+def binned_split_by(forest, binned_halo_idx, column, thresh):
+    binned_high = []
+    binned_low = []
+    for halo_idx in binned_halo_idx:
+        high, low = split_by(forest, halo_idx, column, thresh)
+        binned_high.append(high)
+        binned_low.append(low)
+    return binned_high, binned_low
+
+def plot_cdeltas(forest, halo_idx, fig = None, ax = None, colors = None, labels = None, i = 0, **kwargs):
+    if fig is None:
+        fig, ax = plt.subplots()
+    else:
+        fig = fig
+        ax = ax
+    if colors is None:
+        colors = iter(cm.jet(np.linspace(0,1,len(halo_idx))))
+        
+    cdeltas = forest['sod_halo_cdelta'][halo_idx]
+    #norm_factor = len(cdeltas)*dx # where dx is width of one bin
+    hist = np.histogram(cdeltas, bins = 10, density = True)
+    bin_centers = (hist[1][:-1] + hist[1][1:]) / 2
+    if labels is None:
+        current_label = "bin " + str(i + 1)
+    else:
+        current_label = next(labels)
+    ax.plot(bin_centers, hist[0], label = current_label, color = next(colors), **kwargs)
+    ax.legend()
+    return cdeltas, fig, ax
+
+def plot_binned_cdeltas(forest, binned_halo_idx, fig = None, ax = None, colors = None, labels = None, **kwargs): # Different bins, but same category
+
+    fig = fig # Lots of recursive, subtext things going on here
+    ax = ax
+    binned_cdeltas = []
+    for i, halo_idx in enumerate(binned_halo_idx): #
+        cdeltas, fig, ax = plot_cdeltas(forest, halo_idx, fig, ax, colors, labels, i, **kwargs)
+        binned_cdeltas.append(cdeltas)
+    return binned_cdeltas, fig, ax
+
+def calculate_cdeltas(forest, binned_halo_idx, fig = None, ax = None, colors = None, labels = None, **kwargs): # Different bins, but same category
+    
+    if fig is None:
+        fig, ax = plt.subplots()
+    else:
+        fig = fig
+        ax = ax
+    if colors is None:
+        colors = iter(cm.jet(np.linspace(0,1,len(binned_halo_idx))))
+    
+    binned_cdeltas = []
+    for i, halo_idx in enumerate(binned_halo_idx): #
+        cdeltas = forest['sod_halo_cdelta'][halo_idx]
+        norm_factor = len(cdeltas)
+        hist = np.histogram(cdeltas)
+        bin_centers = (hist[1][:-1] + hist[1][1:]) / 2
+        if labels is None:
+            current_label = "bin " + str(i + 1)
+        else:
+            current_label = next(labels)
+        ax.plot(bin_centers, hist[0]/norm_factor, label = current_label, color = next(colors), **kwargs)
+        ax.legend()
+        binned_cdeltas.append(cdeltas)
+    return binned_cdeltas, fig, ax
+
+###################
+# Cosmic Web Maps #
+###################
+
+def calculate_signatures(delta, threshold = 0.2, N = 256, L = 250): # N = mesh size, L = box size
+    kx = fft.fftfreq(N) * N/L * 2*math.pi
+    ky = fft.fftfreq(N) * N/L * 2*math.pi
+    kz = fft.rfftfreq(N) * N/L * 2*math.pi 
+
+    #kgrid = np.meshgrid(kx, ky, kz, indexing='ij')
+    #kgrid: first 3 are x, y, and z axis, then the next dimensions are the grids for x y and z
+    kxgrid, kygrid, kzgrid = np.meshgrid(kx, ky, kz, indexing='ij')
+    k_squared = kxgrid**2 + kygrid**2 + kzgrid**2
+    k_squared[0,0,0] = 1
+
+    delta_f = fft.rfftn(delta)
+    phi = fft.irfftn(delta_f/-k_squared)
+    
+    Fx = fft.irfftn(1j * kxgrid * delta_f/ k_squared) # is this the same as fft.irfftn(1j * kxgrid * fft.rfftn(phi)) ?
+    Fy = fft.irfftn(1j * kygrid * delta_f/ k_squared)
+    Fz = fft.irfftn(1j * kzgrid * delta_f/ k_squared)
+    
+    Txx = fft.irfftn(-kxgrid * kxgrid * delta_f/ k_squared)
+    Txy = fft.irfftn(-kxgrid * kygrid * delta_f/ k_squared)
+    Txz = fft.irfftn(-kxgrid * kzgrid * delta_f/ k_squared)
+    Tyy = fft.irfftn(-kygrid * kygrid * delta_f/ k_squared)
+    Tyz = fft.irfftn(-kygrid * kzgrid * delta_f/ k_squared)
+    Tzz = fft.irfftn(-kzgrid * kzgrid * delta_f/ k_squared)
+    
+    T = np.zeros((256, 256, 256, 3, 3))
+    T[..., 0, 0] = Txx
+    T[..., 0, 1] = Txy
+    T[..., 0, 2] = Txz
+    T[..., 1, 0] = Txy
+    T[..., 1, 1] = Tyy
+    T[..., 1, 2] = Tyz
+    T[..., 2, 0] = Txz
+    T[..., 2, 1] = Tyz
+    T[..., 2, 2] = Tzz
+    eigs = np.linalg.eigvalsh(T)
+    # Find how many are positive, negative (translates to voids, nodes, etc.)
+    mask = eigs > threshold
+    signatures = np.sum(mask, axis=-1)
+    isignatures = 3 - signatures # for plotting purposes
+    
+    return isignatures
+
+def smooth_f(f, sigma, N = 256, L = 250): # N = number of grid cells, L = actual sidelength of subvolume (in Mpc/h)
+    
+    xax = np.linspace(0, L, N, endpoint = False) # Last entry will be ~249, at position i = 255
+    dxax = L/N # size of each interval (like a dx)
+    x, y, z = np.meshgrid(xax, xax, xax, indexing='ij')
+    x[x > L/2] -= L
+    y[y > L/2] -= L
+    z[z > L/2] -= L
+    g = 1/ ((2 * np.pi * sigma**2)**(3/2)) * np.exp(-( (x**2 + y**2 + z**2) / ( 2.0 * sigma**2 ) ) )
+    fsmooth = fft.irfftn(fft.rfftn(f) * fft.rfftn(g*(dxax**3)))
+    return fsmooth
+
+########################
+# Cloud in Cell Helper #
+########################
+
+def cic3d(pos3d, resolution, shift=False, normalize=True):
+    grid = np.zeros((resolution, resolution, resolution), dtype=np.float64) # Same as how I made a grid of zeros to start with (?)
+    x = np.empty(3, dtype=np.float32)
+    for i in range(len(pos3d)): # 3D array of positions (I assume?)
+        x[:] = pos3d[i]*resolution # i guess pos3d[i] must have length 3? (that would make sense, since it's 3D and all...)
+        if not shift: # What's the alternative?
+            # we want x to be the lower left corner of the cube which we are depositing
+            x[0] = np.fmod(resolution + x[0]-0.5, resolution)
+            x[1] = np.fmod(resolution + x[1]-0.5, resolution)
+            x[2] = np.fmod(resolution + x[2]-0.5, resolution)
+
+        ix = np.uint32(x[0])
+        iy = np.uint32(x[1])
+        iz = np.uint32(x[2])
+        
+        #print("ix iy and iz")
+        #print(ix, iy, iz)
+
+        ix1 = (ix+1) % resolution
+        iy1 = (iy+1) % resolution
+        iz1 = (iz+1) % resolution
+        
+        #print("ix1 iy1 and iz1")
+        #print(ix1, iy1, iz1)
+
+        dx = x[0] - ix
+        dy = x[1] - iy
+        dz = x[2] - iz
+
+        ix %= resolution
+        iy %= resolution
+        iz %= resolution
+
+        tx = 1 - dx
+        ty = 1 - dy
+        tz = 1 - dz
+
+        grid[ix, iy,  iz]  += tx*ty*tz
+        grid[ix, iy,  iz1] += tx*ty*dz
+        grid[ix, iy1, iz]  += tx*dy*tz
+        grid[ix, iy1, iz1] += tx*dy*dz
+
+        grid[ix1, iy,  iz]  += dx*ty*tz
+        grid[ix1, iy,  iz1] += dx*ty*dz
+        grid[ix1, iy1, iz]  += dx*dy*tz
+        grid[ix1, iy1, iz1] += dx*dy*dz
+
+    if normalize:
+        grid /= np.mean(grid)
+    return grid
+
+########################
+# Power spectra (auto) #
+########################
+
+# Averaging shells over k-space
+@numba.jit(nopython=True)
+def evaluate_auto_ps_cic(kfield, L, nbins, correct_CIC=True): # nbins is number of shells that the function bins over
+    # CIC = cloud-in-cell approach (?)
+    N = kfield.shape[0]
+    kmin = 1.0
+    kmax = np.sqrt(3) * N/2
+    if nbins == 0:
+        nbins = np.int(np.ceil(kmax-kmin)) # "ceiling" (smallest integar >= x) of each element x
+    dk = (kmax-kmin)/nbins # size of one step along k mesh
+    dhalf = np.pi/N
+
+    # Fields to store power spectrum
+    ps = np.zeros(nbins, dtype=np.float64)
+    pn = np.zeros(nbins, dtype=np.int64)
+    pk = np.zeros(nbins, dtype=np.float64)
+    pk2 = np.zeros(nbins, dtype=np.float64)
+
+    kfac = 2*np.pi/L # How is L (length?) different from N? Maybe N is size of meshgrid, where L is physical length of the box?
+
+    for l in range(N): # N is length of one dimension of the kfield (which I assume is square?)
+        for m in range(N):
+            for n in range(N//2+1): # Two backslashes = floor division
+                lk = l if l < N//2 else l-N # So these are sometimes negative? # Is that to create a zero center?
+                mk = m if m < N//2 else m-N
+                nk = n
+
+                k = np.sqrt(lk**2 + mk**2 + nk**2) * kfac # Ah, I guess the negative signs don't matter (at least here2)
+                if k==0:
+                    continue
+                k_index = int((np.sqrt(lk**2 + mk**2 + nk**2)-kmin)/dk) # distance from the edge divided by step size = number of steps from the edge?
+
+                if k_index >= 0 and k_index < nbins:
+                    if correct_CIC:
+                        wx = 1. if lk==0 else np.sinc(lk/N)
+                        wy = 1. if mk==0 else np.sinc(mk/N)
+                        wz = 1. if nk==0 else np.sinc(nk/N)
+                        w = (wx*wy*wz)**2
+                    else:
+                        w = 1
+
+                    v2 = kfield[l, m, n].real**2 + kfield[l, m, n].imag**2 # what does v2 stand for? # How does that l, m, n indexing work if they are negative?
+                    v2 /= w**2
+
+                    if n==0: # Why is the first index in this dimension special? (also which dimension is this actually? Acting like z)
+                        ps[k_index] += v2
+                        pn[k_index] += 1
+                        pk[k_index] += k
+                        pk2[k_index] += k**2
+                    else: # This accounts for the missing "mirrored" values
+                        ps[k_index] += 2*v2 # This should involve a value plus conjugate(value) I guess?
+                        pn[k_index] += 2
+                        pk[k_index] += 2*k
+                        pk2[k_index] += 2*k**2
+
+    mask = (pn > 0) # How would pn ever be less than 0? 
+    psm = np.empty((np.sum(mask), 4)) # Power spectrum m...? # Also why is a sum forming the shape? Ohhh because that's the number of true entries # also why 4?
+    j = 0 # Why selected ahead of time like this?
+    for i in range(nbins):
+        if mask[i]:
+            psm[j, 0] = pk[i]/pn[i]
+            psm[j, 1] = ps[i]/pn[i]/L**3
+            psm[j, 2] = pn[i]
+            psm[j, 3] = pk2[i]/pn[i] - (pk[i]/pn[i])**2
+            if psm[j, 3] < 0:
+                psm[j, 3] = 0
+            j += 1 # This is a fancy way to do a for loop without doing a for loop (what does it gain for you?)
+
+    return psm
+
+def compute_pk_dens(rho1, nbins, L,  correct_CIC=True):
+    N = rho1.shape[0] # size of one dimension along the mesh grid
+    rho1_k = _fft.rfftn(rho1, **_fft_kwargs)*(L/N)**3 # _fft_kwargs may or may not get used
+    return evaluate_auto_ps_cic(rho1_k, L, nbins, correct_CIC)
+
+#################
+# Cross Spectra #
+#################
+
+@numba.jit(nopython=True)
+def evaluate_cross_spectra_cic(kfield1, kfield2, L, nbins, correct_CIC=True):
+    N = kfield1.shape[0] # I'm guessing these fields (kfield1 and kfield2) should be the same shape?
+    kmin = 1.0
+    kmax = np.sqrt(3) * N/2
+    if nbins == 0:
+        nbins = np.int(np.ceil(kmax-kmin))
+    dk = (kmax-kmin)/nbins
+    dhalf = np.pi/N
+    # Fields to store power spectrum
+    ps = np.zeros(nbins, dtype=np.float64)
+    pn = np.zeros(nbins, dtype=np.int64)
+    pk = np.zeros(nbins, dtype=np.float64)
+    pk2 = np.zeros(nbins, dtype=np.float64)
+    kfac = 2*np.pi/L
+    for l in range(N): # N is length of one dimension of the kfield (which I assume is square?)
+        for m in range(N):
+            for n in range(N//2+1): # Two backslashes = floor division
+                lk = l if l < N//2 else l-N # So these are sometimes negative? # Is that to create a zero center?
+                mk = m if m < N//2 else m-N
+                nk = n
+                
+                k = np.sqrt(lk**2 + mk**2 + nk**2) * kfac # Ah, I guess the negative signs don't matter (at least here2)
+                if k==0:
+                    continue
+                k_index = int((np.sqrt(lk**2 + mk**2 + nk**2)-kmin)/dk) # distance from the edge divided by step size = number of steps from the edge?
+                if k_index >= 0 and k_index < nbins:
+                    if correct_CIC:
+                        wx = 1. if lk==0 else np.sinc(lk/N)
+                        wy = 1. if mk==0 else np.sinc(mk/N)
+                        wz = 1. if nk==0 else np.sinc(nk/N)
+                        w = (wx*wy*wz)**2
+                    else:
+                        w = 1
+                        
+                    v2 = kfield1[l, m, n] * np.conjugate(kfield2[l, m, n])
+                    v2 /= w**2
+                    if n==0: # Why is the first index in this dimension special? (also which dimension is this actually? Acting like z)
+                        ps[k_index] += np.real(v2)  # has to be real-valued, since both kfield1 and kfield2 are real-valued at this k
+                        pn[k_index] += 1
+                        pk[k_index] += k
+                        pk2[k_index] += k**2
+                    else:
+                        ps[k_index] += np.real(v2 + np.conjugate(v2))  # we use real to cast the complex value (with 0 imaginary component) to a real value
+                        pn[k_index] += 2
+                        pk[k_index] += 2*k
+                        pk2[k_index] += 2*k**2
+                        
+    mask = (pn > 0) # How would pn ever be less than 0? 
+    psm = np.empty((np.sum(mask), 4)) # What does the "m" stand for in "psm"?
+    j = 0 # Why selected ahead of time like this?
+    for i in range(nbins):
+        if mask[i]:
+            psm[j, 0] = pk[i]/pn[i]
+            psm[j, 1] = ps[i]/pn[i]/L**3
+            psm[j, 2] = pn[i]
+            psm[j, 3] = pk2[i]/pn[i] - (pk[i]/pn[i])**2
+            if psm[j, 3] < 0:
+                psm[j, 3] = 0
+            j += 1 # This is a fancy way to do a for loop without doing a for loop (what do we gain from doing it this way?)
+    return psm
+
+def compute_pk_cross_dens(rho1, rho2, nbins, L,  correct_CIC=True):
+    N = rho1.shape[0] # size of one dimension along the mesh grid
+    rho1 = _fft.rfftn(rho1, **_fft_kwargs)*(L/N)**3 # _fft_kwargs may or may not get used
+    rho2 = _fft.rfftn(rho2, **_fft_kwargs)*(L/N)**3 # This division is something we do to normalize the 1D power spectrum?
+    return evaluate_cross_spectra_cic(rho1, rho2, L, nbins, correct_CIC)
+
+############################################
+# Auto-correlation function (from spectra) #
+############################################
+
+@numba.jit(nopython=True)
+def average_in_real_space(xfield, L, nbins = 0): # named "xfield" as a reminder that we are in real space
+    N = xfield.shape[0]
+    xmin = 1.0 # first bin
+    xmax = np.sqrt(3) * N/2 # last bin
+    if nbins == 0:
+        nbins = np.int(np.ceil(xmax-xmin)) # assign number of bins automatically
+    dx = (xmax-xmin)/nbins # size of one step along k mesh
+
+    # Fields to store pieces of autocorrelation function
+    pspec = np.zeros(nbins, dtype=np.float64)
+    pn = np.zeros(nbins, dtype=np.int64)
+    px = np.zeros(nbins, dtype=np.float64)
+
+    xfac = L/N # The size of one cube
+
+    for l in range(N):
+        for m in range(N):
+            for n in range(N): # z is no longer half the size of the other fields
+                lx = l if l < N//2 else l-N # Need these so we can find the shortest distance to a point (which may be "wrapping around")
+                mx = m if m < N//2 else m-N
+                nx = n if n < N//2 else n-N
+
+                x = np.sqrt(lx**2 + mx**2 + nx**2) * xfac # number of cubes away from the origin (?) or distance from origin
+                if x==0:
+                    continue
+                x_index = int((np.sqrt(lx**2 + mx**2 + nx**2)-xmin)/dx) # which bin are we in
+
+                if x_index >= 0 and x_index < nbins: # if in the desired bin
+                    pspec[x_index] += xfield[l, m, n] # this replaces the old v2: no real or imag, cause we're in real space. This is the actual ps (?)
+                    pn[x_index] += 1 # bins?
+                    px[x_index] += x # r
+            
+    mask = (pn > 0) # How would pn ever be less than 0?
+    psm = np.empty((np.sum(mask), 2)) # psm = power spectrum means
+    j = 0
+    for i in range(nbins):
+        if mask[i]:
+            psm[j, 0] = px[i]/pn[i]
+            psm[j, 1] = pspec[i]/pn[i]
+            j += 1
+
+    return psm
+
+def compute_autocorr(delta, N = 256, L = 250, nbins = 100): # N = mesh size, L = box size, nbins = number of shells to average over
+
+    delta_k = fft.rfftn(delta) # delta(k) instead of delta(x)
+    delta_k_conj = np.conjugate(delta_k)
+    product = delta_k * delta_k_conj
+    product_real = fft.irfftn(product)
+    return average_in_real_space(product_real, L, nbins)
+
+######################
+# Cross-correlations #
+######################
+
+def compute_crosscorr(delta1, delta2, N = 256, L = 250, nbins = 100): # N = mesh size, L = box size, nbins = number of shells to average over
+
+    delta1_k = fft.rfftn(delta1)
+    delta2_k = fft.rfftn(delta2) # delta(k) instead of delta(x)
+    # What was all this about? Might have been mixing up with cross-spectra... maybe?
+    delta1_k_conj = np.conjugate(delta1_k) # Need this?
+    delta2_k_conj = np.conjugate(delta2_k)
+    product = delta1_k * delta2_k_conj
+    product_real = fft.irfftn(product)
+    return average_in_real_space(product_real, L, nbins)
+
+#################
+# Mass matching #
+#################
+
+def match_masses(forest, fgs, all_halos): # for z=0 version, use data, fg_idx, all_halos_idx
+
+    # define the mass range
+    fg_range = np.log10([np.min(forest['tree_node_mass'][fgs]), np.max(forest['tree_node_mass'][fgs])])
+    # create fine mass bins
+    nbins=101
+    massbins = np.linspace(*fg_range, nbins, endpoint=True) # The * unpacks the tuple
+    fg_mass_hist, _ = np.histogram(np.log10(forest['tree_node_mass'][fgs]), bins=massbins)
+    all_mass_hist, _ = np.histogram(np.log10(forest['tree_node_mass'][all_halos]), bins=massbins)
+    p_thresholds = fg_mass_hist/all_mass_hist
+    p_thresholds *= 0.5 / np.max(p_thresholds)
+    p_thresholds = np.append(p_thresholds, [0])
+    data_bin = (np.log10(forest['tree_node_mass'][all_halos]) - fg_range[0]) / (fg_range[1]-fg_range[0]) * (nbins)
+    data_bin = data_bin.astype(np.int64)
+    data_bin = data_bin.clip(min=-1, max=len(p_thresholds)-1)
+    np.random.seed(0)
+    mask = np.random.uniform(0., 1., data_bin.shape) < p_thresholds[data_bin]
+    return all_halos[mask], mask
+
+#def match_key_catalog(data, fg_catalog, key = 'tree_node_mass'): # could also handle concentrations, but the logs will change results slightly
+#    # range of FGs
+#    fg_range = np.log10([np.min(fg_catalog[key]), np.max(fg_catalog[key])])
+#    # fine mass-bins
+#    nbins=201 # why 201 instead of 200?
+#    massbins = np.linspace(*fg_range, nbins, endpoint=True)
+#    print(massbins)
+#    fg_mass_hist, _ = np.histogram(np.log10(fg_catalog[key]), bins=massbins)
+#    all_mass_hist, _ = np.histogram(np.log10(data[key]), bins=massbins)
+#    # Selection probabilities
+#    p_thresholds = fg_mass_hist/all_mass_hist
+#    p_thresholds /=  np.max(p_thresholds)
+#    p_thresholds = np.append(p_thresholds, [0])
+#    data_bin = (np.log10(data[key]) - fg_range[0]) / (fg_range[1]-fg_range[0]) * (nbins)
+#    data_bin = data_bin.astype(np.int64)
+#    data_bin = data_bin.clip(min=-1, max=len(p_thresholds)-1)
+#    # Random selection according to mass distribution
+#    mask = np.random.uniform(0., 1., data_bin.shape) < p_thresholds[data_bin]
+#    return mask
+
+def match_catalogs_by_key(data, fg_catalog, key = 'sod_halo_cdeltas', data_mask = None, fg_mask = None): # Masks are primarily if there is a mass bin involved
+    # range of FGs
+    
+    if fg_mask is None: # Assume if fg_mask is None, data_mask is also None
+        fg_range = [np.min(fg_catalog[key]), np.max(fg_catalog[key])]
+    else:
+        fg_range = [np.min(fg_catalog[key][fg_mask]), np.max(fg_catalog[key][fg_mask])]
+    # fine mass-bins
+    nbin_edges=201 # why 201 instead of 200?
+    keybins = np.linspace(*fg_range, nbin_edges, endpoint=True) # "key" refers to whatever key you set above (e.g. concentration, relaxation, etc.)
+    if fg_mask is None:
+        fg_key_hist, _ = np.histogram(fg_catalog[key], bins=keybins)
+        all_key_hist, _ = np.histogram(data[key], bins=keybins)
+    else:
+        fg_key_hist, _ = np.histogram(fg_catalog[key][fg_mask], bins=keybins)
+        all_key_hist, _ = np.histogram(data[key][data_mask], bins=keybins)
+    
+    # Might need to remove some 0's in the denominator?
+    #print("0s in array: ", len(all_key_hist[all_key_hist < 1]))
+    positive_mask = all_key_hist > 0
+    all_key_hist = all_key_hist[positive_mask]
+    fg_key_hist = fg_key_hist[positive_mask]
+    
+    # Selection probabilities
+    p_thresholds = fg_key_hist/all_key_hist # Will cause some nan's. Can I just replace those with zero? (Also, why didn't they happen with masses?)
+    # Remove nans
+    p_thresholds[np.isnan(p_thresholds)] = 0
+    p_thresholds /=  np.max(p_thresholds) # Global normalization
+    p_thresholds = np.append(p_thresholds, [0])
+    
+    if fg_mask is None:
+        data_bin = (data[key] - fg_range[0]) / (fg_range[1]-fg_range[0]) * (nbin_edges) # (data value - min fg value) / fg range * n_edges
+    else:
+        data_bin = (data[key][data_mask] - fg_range[0]) / (fg_range[1]-fg_range[0]) * (nbin_edges)
+
+    data_bin = data_bin.astype(np.int64)
+    data_bin = data_bin.clip(min=-1, max=len(p_thresholds)-1)
+    # Random selection according to mass distribution
+    mask = np.random.uniform(0., 1., data_bin.shape) < p_thresholds[data_bin] # what's the point of this data_bin stuff if we're just using the shape?
+    return mask
+
 ########################################################
-# Plot evolution:                                      #        
+# Plot evolution:                                      #
 # Display M(z) for halos that we tracked in track_evol #
 ########################################################
     
-def plot_evol(masses, mm_times = [], thresholds = [], filename = "new_plot", bins = [], redshifts = redshifts, avg = False, normalized = False, extremum = '', quant = 0, mass_range = [], x_axis = "z_nums", fig = None, ax = None, auto_legend = True, cust_legend = [], extra_legend = [], cust_color = None, **kwargs):
+def plot_evol(masses, mm_times = [], thresholds = [], filename = "new_plot", bins = [], redshifts = redshifts, avg = False, normalized = False, mass_fractions = False, plot_std = False, extremum = '', quant = 0, mass_range = [], x_axis = "z_nums", fig = None, ax = None, auto_legend = False, cust_legend = [], extra_legend = [], cust_color = None, cust_color_iter = None, **kwargs):
     
     if ax is None:
         fig, ax = plt.subplots()
     else:
         fig = fig
         ax = ax
-    color = iter(cm.jet(np.linspace(0,1,len(masses)))) # Bin colors
+    if cust_color_iter == None:
+        color = iter(cm.jet(np.linspace(0,1,len(masses)))) # Bin colors
+    else:
+        color = cust_color_iter
     bin_legend_handles = []
     
-    # Change zeros to nans so they don't get plotted
-    for m in range(len(masses)):
-        masses[m][masses[m] == 0] = np.nan
+    # Change zeros to nans so they don't get plotted # Is there not a better way to do this?
+    for this_bin in masses:
+        this_bin[this_bin == 0] = np.nan
     
     # Establish timesteps
     if x_axis == 'z_nums':
-        timesteps = redshifts
+        timesteps = np.flip(redshifts)
     elif x_axis == 'snap_nums':
         timesteps = np.linspace(0, 100, 101)
     
     # Plot
     for n, this_bin in enumerate(masses): # loop over all bins
-        if cust_color is None:
-            current_color = next(color)
-        else:
+        # Pick colors
+        if cust_color is not None:
             current_color = cust_color
+        else:
+            current_color = next(color)
         
-        ax.plot(timesteps, this_bin, color = current_color, **kwargs)
-
         # Pick your plot style
         if avg == True:
+            if mass_fractions:
+                this_bin = this_bin / this_bin[-1]
+                #print("this_bin before division\n", this_bin)
+                #this_bin = this_bin / this_bin[0][-1] # All
+                #print("this_bin after division\n", this_bin)
+            if plot_std:
+                this_bin[np.isnan(this_bin)] = 0
+                stddev = np.std(this_bin, axis = 0)
+                ax.fill_between(timesteps, this_bin - stddev, this_bin + stddev, alpha = 0.1, color = current_color) 
             if cust_legend != []:
                 bin_legend_handles.append(mpatches.Patch(color=current_color, label=cust_legend))
             else:
@@ -377,7 +1009,15 @@ def plot_evol(masses, mm_times = [], thresholds = [], filename = "new_plot", bin
                 filename = "norm_" + filename
             elif normalized == False:
                 title = "Averaged mass evolution of halos in " + str(int(len(bins) - 1)) + " bins"
+        
         else:
+            if mass_fractions:
+                this_bin = this_bin / this_bin[-1]
+            if plot_std:
+                this_bin[np.isnan(this_bin)] = 0
+                avgs = np.average(this_bin, axis = 0)
+                stddev = np.std(this_bin, axis = 0)
+                ax.fill_between(timesteps, avgs - stddev, avgs + stddev, alpha = 0.1, color = current_color) # This is only correct when you are already averaging -- otherwise you need to average
             if extremum == 'max':
                 title = "Mass evolution of " + str(quant) + " most massive halos"
             elif extremum == 'min':
@@ -387,6 +1027,9 @@ def plot_evol(masses, mm_times = [], thresholds = [], filename = "new_plot", bin
                     title = "Mass evolution of halos in range " + "{:.2e}".format(mass_range[0]) + " to " + "{:.2e}".format(mass_range[1])
                 else:
                     title = "Mass evolution of halo(s)"
+       
+        # Actually plot the evolution
+        ax.plot(timesteps, this_bin, color = current_color, **kwargs)
     
     # Display major mergers (if desired)
     # Only works for non_binned results, really...
@@ -409,7 +1052,7 @@ def plot_evol(masses, mm_times = [], thresholds = [], filename = "new_plot", bin
                         merg = redshifts[int(100 - this_mm)]
                     elif x_axis == "snap_nums":
                         merg = this_mm
-                    ax.axvline(merg, color = current_color, linestyle = this_linestyle)
+                    ax.axvline(merg, color = current_color, linestyle = thbinis_linestyle)
             
     ax.set_yscale('log', nonpositive = 'clip')
     #ax.set_title(title)
@@ -421,7 +1064,10 @@ def plot_evol(masses, mm_times = [], thresholds = [], filename = "new_plot", bin
     if normalized == True:
         ax.set_ylabel(r'Normalized Mass $[h^{-1}M_\odot]$')
     else:
-        ax.set_ylabel(r'Mass $[h^{-1}M_\odot]$')
+        if mass_fractions == True:
+            ax.set_ylabel(r'Mass Fraction $[h^{-1}M_\odot]$')
+        else:
+            ax.set_ylabel(r'Mass $[h^{-1}M_\odot]$')
         
     if auto_legend == True:
         # Fancy legend
@@ -520,10 +1166,13 @@ def plot_CDF(data, bins = [], bin_labels = [], cust_legend = [], redshifts = red
         current_color = next(color) # Used to loop over thresholds right after this
         
         # Plot
+        this_bin = this_bin[this_bin >= 0] # Remove any negative values (coming from rugs)
+        # Couldn't I also do this with a histogram? Or somehow get the lines to extend "to the end"?
+        # Old way
         data_sorted = np.sort(this_bin) # Should automatically sort along the last axis
         hist_keys = [key for key, group in groupby(data_sorted)] # Redshift values
         hist_values = [len(list(group)) for key, group in groupby(data_sorted)] # Count of each redshift value
-        cum_probs = np.cumsum(hist_values) / len(data[bin_n]) # used to be comparison_data
+        cum_probs = np.cumsum(hist_values) / len(data[bin_n])
 
         if z_end is not None:
             hist_keys = np.append(hist_keys, z_end)
@@ -537,7 +1186,7 @@ def plot_CDF(data, bins = [], bin_labels = [], cust_legend = [], redshifts = red
             bin_legend_handles.append(mpatches.Patch(color=current_color, label = bin_labels[bin_n]))
     
     # Accessorize
-    ax.set_title("CDF of Last Luminous Mergers")
+    #ax.set_title("CDF of Last Luminous Mergers")
     ax.set_ylabel("Probability")
     
     if x_axis == 'z_nums':
@@ -570,20 +1219,25 @@ def plot_CDF(data, bins = [], bin_labels = [], cust_legend = [], redshifts = red
 # Display PDF distribution of some metric using np.histogram() #
 ################################################################
 
-def plot_mass_growth_rates(alphas, bins = [], bin_labels = [], zoom = False, n_hist_bins = 10, log = False, fig = None, ax = None, **kwargs): # bin labels is an optional way to supply custom bin labels
+def plot_mass_growth_rates(alphas, bins = [], bin_labels = [], zoom = False, n_hist_bins = 10, log = False, fig = None, ax = None, cust_citer = None, **kwargs): # bin labels is an optional way to supply custom bin labels
 
-    color = iter(cm.jet(np.linspace(0,1,len(alphas))))
+    if cust_citer == None:
+        color = iter(cm.jet(np.linspace(0,1,len(alphas))))
+    else:
+        color = cust_citer
+        
     all_alphas = []
     hist_bins = np.linspace(-10, 10, n_hist_bins)
     bin_legend_handles = []
     if ax == None:
-        fig, ax = plt.subplots()
+        fig, ax = plt.subplots(figsize=(5,3.75))
     else:
         fig = fig
         ax = ax
 
     # For all bins
     for bin_n, this_alpha in enumerate(alphas):
+        print("bin n: ", bin_n)
         current_color = next(color)
         
         # For all halo trees
@@ -605,7 +1259,7 @@ def plot_mass_growth_rates(alphas, bins = [], bin_labels = [], zoom = False, n_h
             else:
                 bin_legend_handles.append(mpatches.Patch(color=current_color, linestyle = '-', label=("bin " + str(bin_n + 1) + ": (" + "{:.2e}".format(bins[bin_n]) + " to " + "{:.2e}".format(bins[bin_n+1]) + ")")))
         else:
-            bin_legend_handles.append(mpatches.Patch(color=current_color, linestyle = '-', label=("bin " + str(bin_n + 1) + ": " + bin_labels[bin_n])))
+            bin_legend_handles.append(mpatches.Patch(color=current_color, linestyle = '-', label=(bin_labels[bin_n])))
     
     # Accesorize the plots
     if log == True:
@@ -620,7 +1274,7 @@ def plot_mass_growth_rates(alphas, bins = [], bin_labels = [], zoom = False, n_h
         axis.set_major_formatter(ScalarFormatter())
     
     ax.set_yscale('log')
-    ax.set_xlabel(r"$\alpha_M$ $[d\logM/d\logt]$")
+    ax.set_xlabel(r"$d\log(M) / d\log(t)$") # Used to be \alpha_M 
     ax.set_ylabel("N + 1")
     return fig, ax
     
@@ -631,8 +1285,23 @@ def plot_mass_growth_rates(alphas, bins = [], bin_labels = [], zoom = False, n_h
 
 def plot_main_branch_length(mainbranch_index, n_bins = 32, hist_bins = [], zoom = False, log = True, dist_or_hist = 'dist'):
     
+    print("in function")
     # Turn mainbranch_index into a traditional main progenitor list
     mp_list = [[[prog_id for prog_id in this_halo if prog_id != -1] for this_halo in np.flip(this_bin_idx)] for this_bin_idx in mainbranch_index]
+    
+    a = []
+    for this_bin_idx in mainbranch_index:
+        b = []
+        for this_halo in np.flip(this_bin_idx):
+            c = []
+            for prog_id in this_halo:
+                if prog_id != -1:
+                    c.append(prog_id)
+            b.append(c)
+        a.append(b)
+        
+    
+    print(mp_list)
     
     # Note: assume mp_list is binned
     fig, (ax, cax) = plt.subplots(1, 2, figsize=(5, 3), gridspec_kw=dict(wspace=0.03, width_ratios=[1, 0.03]))
@@ -650,7 +1319,7 @@ def plot_main_branch_length(mainbranch_index, n_bins = 32, hist_bins = [], zoom 
         current_color = colors[i]
         mp_lengths = []
 
-        # Loop over each halo root
+        # Loop over each halo root (don't use this language anymore, lol)
         for j in np.arange(len(mp_list[i])):
             mp_lengths.append(len(mp_list[i][j]))
 
@@ -689,16 +1358,17 @@ def plot_cum_mms(binned_averages, bins, bin_labels = [], cust_legend = [], redsh
     else:
         fig = ax.figure
         
-    color = iter(cm.jet(np.linspace(0,1,len(bins) - 1)))
+    colors = cm.jet(np.linspace(0,1,len(bins)))
     bin_legend_handles = []
     
-    for bin_n in range(len(bins) - 1): # Loop over bins
-        current_color = next(color)
-        ax.plot(redshifts, binned_averages[bin_n], color = current_color, **kwargs)
+    for i, this_bin in enumerate(bins):
+    #for bin_n in range(len(bins) - 1): # Loop over bins
+        current_color = colors[i]
+        ax.plot(redshifts, binned_averages[i], color = current_color, **kwargs)
         if bin_labels == []:
-            bin_legend_handles.append(mpatches.Patch(color=current_color, label="bin " + str(bin_n + 1) + ": (" + "{:.2e}".format(bins[bin_n]) + " to " + "{:.2e}".format(bins[bin_n+1]) + ")"))
+            bin_legend_handles.append(mpatches.Patch(color=current_color, label="bin " + str(i + 1) + ": (" + "{:.2e}".format(this_bin[0]) + " to " + "{:.2e}".format(this_bin[1]) + ")"))
         else:
-            bin_legend_handles.append(mpatches.Patch(color=current_color, label = bin_labels[bin_n]))
+            bin_legend_handles.append(mpatches.Patch(color=current_color, label = bin_labels[i]))
 
      # Fancy legend
     leg1 = ax.legend(handles = bin_legend_handles, loc='lower right')
@@ -790,6 +1460,114 @@ def pdf_lms(mm_times_raw, thresholds, bins, bin_labels = [], cust_legend = [], m
     for axis in [ax.xaxis, ax.yaxis]:
         axis.set_major_formatter(ScalarFormatter())
 
+    return fig, ax
+
+####################################
+# Plot averages of FGs vs. non-FGs #
+####################################
+
+def plot_compare_avgs(forest, fg_forest, halo_idx, fg_idx, mbins, nsamples = 5, xaxis = "z_nums", xend = 6, ylims = [3*10**10, 4*10**13], redshifts = redshifts, mass_fractions = False, plot_samples = True, plot_std = True, fig = None, ax = None):
+
+    color = iter(["turquoise", "plum"])
+    handles = []
+    
+    if plot_samples:
+        for this_idx, this_catalog in zip([halo_idx, fg_idx], [forest, fg_forest]): # For each bin
+            current_color = next(color)
+            sampled_idx = np.random.choice(this_idx, nsamples, replace=False)
+            mainbranch_index, mainbranch_masses = get_branches(sampled_idx, this_catalog) # Whyyyyy
+            #print("Sending this to plot_evol: shape: ", mainbranch_masses.shape, "\n", mainbranch_masses)
+            fig, ax = plot_evol(mainbranch_masses, x_axis = xaxis, fig = fig, ax = ax, cust_color = current_color, mass_fractions = mass_fractions)
+            # Come back here! [] around mainbranch_masses or not?
+        
+    # Now try the non-FGs
+    color_for_avgs = iter(["darkblue", "darkviolet"])
+    avg_tf = True
+    label_for_avgs = iter(["average: all halos", "average: fossil group candidates"])
+    
+    for i, (this_idx, this_catalog) in enumerate(zip([halo_idx, fg_idx], [forest, fg_forest])):
+        current_color = next(color_for_avgs)
+        current_label = next(label_for_avgs)
+        mainbranch_index, mainbranch_masses = get_branches(this_idx, this_catalog)
+        mainbranch_avg_masses = avg_mass_bins([mainbranch_masses])
+        #print("mainbranch avg masses shape:\n", len(mainbranch_avg_masses))
+        #print("mainbranch avg masses:\n", mainbranch_avg_masses)
+        fig, ax = plot_evol(mainbranch_avg_masses, bins = mbins, avg = True, x_axis = xaxis, fig = fig, ax = ax, cust_color = current_color, cust_legend = current_label, mass_fractions = mass_fractions, plot_std = plot_std)
+        fake_line, = ax.plot([],[], color=current_color, label=current_label)
+        handles.append(fake_line)
+
+    # Zoom in, make it pretty
+    ax.set_xlim(xend, 0)
+    ax.set_xscale('symlog', linthresh = 1, linscale = 0.4)
+    if ylims is not None:
+        ax.set_ylim(ylims[0], ylims[1])
+    ax.xaxis.set_ticks(np.arange(0, xend, 1))
+    ax.xaxis.set_major_formatter(ScalarFormatter())
+    ax.legend(handles = handles, loc = "lower right")
+    return fig, ax
+
+def plot_compare_avgs_old(forest, fg_idx, nonfg_idx, mbins, nsamples = 5, xaxis = "z_nums", xend = 6, ylims = [3*10**10, 4*10**13], fig = None, ax = None):
+
+    color = iter(["turquoise", "plum"]) #iter(["lightpink", "powderblue", "salmon", "turquoise"])
+    handles = []
+
+    # First, plot some samples
+    for halo_idx in [fg_idx, nonfg_idx]: # For each bin
+        current_color = next(color)
+        sampled_idx = np.random.choice(halo_idx, nsamples, replace=False)
+        mainbranch_index, mainbranch_masses = get_branches(sampled_idx, forest)
+        fig, ax = plot_evol(mainbranch_masses, x_axis = xaxis, fig = fig, ax = ax, cust_color = current_color)
+
+    # Now try the non-FGs
+    color_for_avgs = iter(["darkblue", "darkviolet"])
+    avg_tf = True
+    label_for_avgs = iter(["average: fossil group candidates", "average: all halos"])
+    #print(len(custom_legend))
+    for halo_idx in [fg_idx, nonfg_idx]:
+        current_color = next(color_for_avgs)
+        current_label = next(label_for_avgs)
+        mainbranch_binned_index, mainbranch_binned_masses = get_binned_branches([halo_idx], forest) # Maybe make this binnable?
+        mainbranch_avg_masses = avg_mass_bins(mainbranch_binned_masses)
+        fig, ax = plot_evol(mainbranch_avg_masses, bins = mbins, x_axis = xaxis, fig = fig, ax = ax, cust_color = current_color, cust_legend = current_label)
+        fake_line, = ax.plot([],[], color=current_color, label=current_label)
+        handles.append(fake_line)
+
+    # Zoom in, make it pretty
+    ax.set_xlim(xend, 0)
+    ax.set_xscale('symlog', linthresh = 1, linscale = 0.4)
+    ax.set_ylim(ylims[0], ylims[1])
+    ax.xaxis.set_ticks(np.arange(0, xend, 1))
+    ax.xaxis.set_major_formatter(ScalarFormatter())
+    ax.legend(handles = handles, loc = "lower right")
+    return fig, ax
+
+def plot_compare_avgs_V2(forest, fg_idx, nonfg_idx, mbins, nsamples = 5, xaxis = "z_nums", xend = 6, ylims = [3e10, 5e13], normalized = False, fig = None, ax = None): # Assume fg_idx and nonfg_idx should have same mbins
+
+    linestyle_handles = []
+    avg_tf = True
+    linestyles = iter(['--', '-'])
+    category_labels = iter(["fossils", "all halos (fgs & non-fgs)"])
+    
+    for i, halo_idx in enumerate([fg_idx, nonfg_idx]): # each category (fg and nonfg)
+        current_linestyle = next(linestyles)
+        current_label = next(category_labels)
+        mainbranch_binned_index, mainbranch_binned_masses = get_binned_branches(halo_idx, forest)
+        if normalized is True:
+            for bin_n, this_bin_masses in enumerate(mainbranch_binned_masses):
+                mainbranch_binned_masses[bin_n] = this_bin_masses / this_bin_masses[:, [-1]]
+        mainbranch_avg_masses = avg_mass_bins(mainbranch_binned_masses)
+        fig, ax = plot_evol(mainbranch_avg_masses, bins = mbins, x_axis = xaxis, fig = fig, ax = ax, linestyle = current_linestyle)
+        fake_line, = ax.plot([],[], linestyle=current_linestyle, color = 'black', label=current_label)
+        linestyle_handles.append(fake_line)
+
+    # Zoom in, make it pretty
+    ax.set_xlim(xend, 0)
+    ax.set_xscale('symlog', linthresh = 1, linscale = 0.4)
+    ax.set_ylim(ylims[0], ylims[1])
+    ax.xaxis.set_ticks(np.arange(0, xend, 1))
+    ax.xaxis.set_major_formatter(ScalarFormatter())
+    ax.legend(handles = linestyle_handles, loc = "lower right")
+    
     return fig, ax
     
 ####################
@@ -1175,7 +1953,7 @@ def get_mergers(forest, progenitor_array, mainbranch_index, absolute_threshold =
 # Get mergers (major or otherwise) in bins #
 ############################################
 
-def get_binned_mergers(forest, progenitor_array, mainbranch_index, absolute_threshold = False, major_mergers_only = False, merger_threshold = 0.3): # Assume mainbranch_index is binned
+def mergers(forest, progenitor_array, mainbranch_index, absolute_threshold = False, major_mergers_only = False, merger_threshold = 0.3): # Assume mainbranch_index is binned
     
     binned_mergers = []
     binned_mergers_index = []
@@ -1225,3 +2003,46 @@ def OLD_get_aggregate_mergers(forest, progenitor_array, mainbranch_mergers, main
     elif major_mergers_only == False:
         mergers_index = main_merger_index[merger_mask]
         return mergers, mergers_index
+    
+# Why these didn't work
+# merging_halos_idx was actually returning row numbers of mainbranch_idx (and the 'like' matrices)
+# you were then using those row numbers as if they were "indices" and evolving them to the end of their branch
+# surprise! Those were not the right halos
+# instead, you just need to compare last_mm_redshifts to target_idx (they have the same shape)
+# and target_idx will give you the halo_index's that you need
+
+def OLD_find_root(forest, halo_idx, root_snapnum = 100):
+    target_idx = []
+    for this_halo in halo_idx:
+        target_id = this_halo
+        while forest['snapnum'][target_id] != root_snapnum:
+            target_id = forest['descendant_idx'][target_id] # Why did it used to go around so many times?
+        target_idx.append(target_id)
+    return np.array(target_idx)
+
+def OLD_find_fossils(forest, last_mm_redshifts, z_thresh):
+    # Get the index of the merging halo (at the last major merger)
+    merging_halos_idx = np.array((np.argwhere(last_mm_redshifts > z_thresh))[:, 0]) # End index is to deal with weird formatting
+    # Find the halo at the root of this branch
+    fg_idx = find_root(forest, merging_halos_idx)
+    return fg_idx
+
+# Fine, but useless (because you can just use last_mm_redshifts or the like)
+def get_lmm_calatog(major_mergers, last_mm_index, threshold = 5e11):
+
+    # get rid of all entries in mainbranch_mergers that are not at snapnum = last_mm_index (from get_lmms)?
+    mask = np.zeros_like(major_mergers)
+    mask[last_mm_index >= 0, last_mm_index[last_mm_index >= 0]] = 1
+    # Why does that work when this doesn't?
+    #mask[:, last_mm_index] = last_mm_index if last_mm_index != -1 else 0
+    
+    major_mergers[mask == 0] = 0 # ~mask ?
+    return major_mergers
+
+def get_binned_lmm_catalog(mainbranch_mergers, last_mm_index, threshold = 5e11):
+    
+    binned_lmm_catalog = []
+    for this_bin_mainbranch, this_bin_last_mm in zip(mainbranch_mergers, last_mm_index):
+        lmm_catalog = get_lmm_calatog(this_bin_mainbranch, this_bin_last_mm, threshold = 5e11)
+        binned_lmm_catalog.append(lmm_catalog)  
+    return binned_lmm_catalog
