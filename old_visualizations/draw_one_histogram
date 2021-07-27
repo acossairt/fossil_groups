@@ -1,0 +1,30 @@
+# Draw a histogram of masses from the forest table
+
+import pandas as pd
+import matplotlib.pyplot as plt
+
+forest_table = pd.read_hdf('/data/a/cpac/aurora/reducedtrees0.h5', 'ft')
+z0_table = forest_table.mass.loc[forest_table.snap_num == 99] # only use z = 0
+z0_masses_norm = z0_table.array # These are still normalized by a factor of 2.7e9
+z0_masses = z0_masses_norm * 2.7e9 # Unscale them -- masses now have noremal units!
+
+#Take a look at the statistics
+z0_masses.min()
+z0_masses.max()
+z0_masses.mean()
+
+#Draw a histogram
+plt.hist(z0_masses, bins = 'auto',  log = True)
+plt.yscale('log', nonposy = 'clip')
+plt.xlabel("log(Mass)")
+plt.ylabel("log(Frequency)")
+
+plt.title("Mass Distribution at z = 0")
+plt.savefig("full_histogram.png")
+plt.show()
+
+# Notes
+# You might need to set range to something other than min and max;
+# there are some non-negligible outliers out there. Use masses.mean()
+# to guide that decision.
+# You can also set a range for the y-axis using plt.ylim((lower_lim, upper_lim)

@@ -3,3 +3,9 @@
 */.ipynb_checkpoints/
 */diffmah/
 *.h5
+
+# for some reason, git add yells at me if I don't explicitly
+# ignore */diffmah, claiming that I'm putting a repo inside
+# of a repo. But doesn't seem to have the same problem with the
+# */haccytrees? If that ever changes, uncomment "*/haccytrees"  
+# from the list above.

@@ -1,0 +1,27 @@
+import numpy as np
+import matplotlib.pyplot as plt
+import pandas as pd
+
+forest_table = pd.read_hdf('/data/a/cpac/aurora/reducedtrees0.h5', 'ft')
+with open("/data/a/cpac/xinliu/reducedtrees/progenitor_idx0.txt") as f:
+    progenitor_idx = [[int(p) for p in s.strip().split(" ")] if s.strip() != "" else [] for s in f]
+
+target_idx = np.argmax(forest_table['mass'])  # most massive halo
+progenitors = progenitor_idx[target_idx]
+main_progenitor_list = [target_idx]
+while len(progenitors) > 0:
+    masses = [forest_table['mass'][i] for i in progenitors]
+    main_progenitor = progenitors[np.argmax(masses)]
+    main_progenitor_list.append(main_progenitor)
+    progenitors = progenitor_idx[main_progenitor]
+snapnums = [forest_table['snap_num'][mp] for mp in main_progenitor_list]
+masses   = [forest_table['mass'][mp] for mp in main_progenitor_list]
+
+print("Snapnums is: \n", snapnums)
+print("Masses is: \n", masses)
+
+fig, ax = plt.subplots()
+ax.plot(snapnums, masses)
+ax.set_xlabel('Snapshot Number (z = 0 at SN = 99)')
+ax.set_ylabel('Mass')
+plt.show()
