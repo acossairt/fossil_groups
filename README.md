@@ -7,24 +7,24 @@ Welcome! This repo holds notebooks, python scripts, and images relevant to our e
 Our paper, "Cosmo-Paleontology: Statistics of Fossil Groups in a Gravity-Only Simulation" is in preparation.
 
 If you'd like to see the source code for any of the figures in the paper, here are the relevant notebooks
-- Figure 2: `LJ_abundances.ipynb`
-- Table 1: `LJ_abundances.ipynb`
-- Figure 3: `LJ_luminous_mergers.ipynb`
-- Figure 4: `LJ_mass_evolution.ipynb`
-- Figure 5: `LJ_zfracs.ipynb`
-- Figure 6: `LJ_diff_MAHs.ipynb` (which references materials in the diffmah subdirectory)
-- Figure 7: `LJ_concentration_relaxation.ipynb`
-- Figure 8: `LJ_concentration_relaxation.ipynb`
-- Table 2: `LJ_substructures_stats.ipynb`
+- Figure 2: `lj_abundances.ipynb`
+- Table 1: `lj_abundances.ipynb`
+- Figure 3: `lj_luminous_mergers.ipynb`
+- Figure 4: `lj_mass_evolution.ipynb`
+- Figure 5: `lj_zfracs.ipynb`
+- Figure 6: `lj_diff_MAHs.ipynb` (which references materials in the diffmah subdirectory)
+- Figure 7: `lj_concentration_relaxation.ipynb`
+- Figure 8: `lj_concentration_relaxation.ipynb`
+- Table 2: `lj_substructures_stats.ipynb`
 - Figure 9: not in this repo -- reach out to @michaelbuehlmann
-- Figure 10: set up is in `Maps.ipynb` and `Locate_FG_Candidates.ipynb`,
+- Figure 10: set up is in `maps.ipynb` and `locate_FG_Candidates.ipynb`,
              images associated with the cosmic web map construction are in the `map-visualizations` subdirectory,
              for final figures, reach out to @michaelbuehlmann
-- Figure 11: set up is in `Maps.ipynb` and `Locate_FG_Candidates.ipynb`,
+- Figure 11: set up is in `maps.ipynb` and `locate_FG_Candidates.ipynb`,
              images associated with the cosmic web map construction are in the `map-visualizations` subdirectory,
              for final figures, reach out to @michaelbuehlmann
-- Figure 12: `LJ_haccytrees_validation.ipynb`
-- Figure 13: `LJ_haccytrees_validation.ipynb`
+- Figure 12: `lj_haccytrees_validation.ipynb`
+- Figure 13: `lj_haccytrees_validation.ipynb`
 All of these notebooks rely on the helper functions hosted in `help_func_haccytrees.py`. All of the resulting figures (and some images that didn't
 make it into the paper) are stored in the `full_lj_plots` subdirectory.
 
@@ -48,5 +48,5 @@ The latter shows how to find FG candidates for any target index of halos. This i
 
 ## Other statistics in preparation
 The following notebooks (and some associated subdirectories) are for statistics which have not yet been finalized:
-- `LJSV_two-point-correlations.ipynb` and the `two-point-correlations` subdirectory. These stats have so far only been run on the smaller version of LJ.
-- `LJ_gap_statistics.ipynb` (in collaboration with @evevkovacs)
+- `ljsv_two-point-correlations.ipynb` and the `two-point-correlations` subdirectory. These stats have so far only been run on the smaller version of LJ.
+- `lj_gap_statistics.ipynb` (in collaboration with @evevkovacs)
