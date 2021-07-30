@@ -1,6 +1,8 @@
 # fossil_groups
 Argonne National Laboratory - Cosmological Physics and Advanced Computing group (CPAC)
+
 Aurora Cossairt
+
 July 30th, 2021
 
 Welcome! This repo holds notebooks, python scripts, and images relevant to our exploration of fossil group candidates in the Last Journey. 
