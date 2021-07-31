@@ -49,7 +49,7 @@ is a random mix of FG candidates and non-candidates. To see how we chose the hal
 
 ## How-to notebooks
 This repo includes two short "how-to" tutorials: `howto_create_random_sample.ipynb` (discussed above) and `howto_find_FG_candidates.ipynb`. 
-The latter shows how to find FG candidates for any target index of halos. This is a routine used in several other notebooks, but is explained here more thoroughly.
+The latter shows how to find FG candidates for any target index of halos. This is a routine used in several other notebooks, but is shown here alone for clarity.
 
 ## Other statistics in preparation
 The following notebooks (and some associated subdirectories) are for statistics which have not yet been finalized:
