@@ -35,17 +35,17 @@ Many of these notebooks contain cells with experimental code, and it's possible 
 
 ## About our sample
 We primarily examined fossil group candidates hosted in three narrow mass bins:
-- 10^13.0 - 10^13.05 h^{-1} M_\odot: 269,358 FG candidates
-- 10^13.3 - 10^13.35 h^{-1} M_\odot: 36,181 FG candidates
-- 10^13.6 - 10^13.65 h^{-1} M_\odot: 2454 FG candidates
+- 10^13.0 - 10^13.05 $h^{-1} M_\odot$: 269,358 FG candidates
+- 10^13.3 - 10^13.35 $h^{-1} M_\odot$: 36,181 FG candidates
+- 10^13.6 - 10^13.65 $h^{-1} M_\odot$: 2454 FG candidates
 
 In order to compare the features of these candidates to the full sample of halos, we created "random samples" in the same three narrow mass bins.
 Each "random sample" is the same size (i.e. contains the same total number of halos) as the FG sample for the same mass bin. However, this "random sample" 
 is a random mix of FG candidates and non-candidates. To see how we chose the halos to include in each random sample, check out `howto_create_random_sample.ipynb`.
 @michaelbuehlmann then created a new forest just for halos in this sample
-- 10^13.0 - 10^13.05 h^{-1} M_\odot: 269,358 halos; 231,618 non-candidates + 37,740 FG candidates (4,171 of which are QH candidates, 33,569 are just FGs)
-- 10^13.3 - 10^13.35 h^{-1} M_\odot: 36,181 halos; 34,808 non-candidates + 1,373 FG candidates (9 of which are QH candidates, 1,364 are just FGs)
-- 10^13.6 - 10^13.65 h^{-1} M_\odot: 2454 halos; 2441 non-candidates + 13 FG candidates (0 of which are QH candidates)
+- 10^13.0 - 10^13.05 $h^{-1} M_\odot$: 269,358 halos; 231,618 non-candidates + 37,740 FG candidates (4,171 of which are QH candidates, 33,569 are just FGs)
+- 10^13.3 - 10^13.35 $h^{-1} M_\odot$: 36,181 halos; 34,808 non-candidates + 1,373 FG candidates (9 of which are QH candidates, 1,364 are just FGs)
+- 10^13.6 - 10^13.65 $h^{-1} M_\odot$: 2454 halos; 2441 non-candidates + 13 FG candidates (0 of which are QH candidates)
 
 ## How-to notebooks
 This repo includes two short "how-to" tutorials: `howto_create_random_sample.ipynb` (discussed above) and `howto_find_FG_candidates.ipynb`. 
